@@ -1,6 +1,19 @@
 export const RESULT_LIMIT = 8;
 export const MAX_EVIDENCE_CHARS = 4000;
 
+function sourceTitle(payload) {
+  const title = typeof payload.title === "string" && payload.title.trim()
+    ? payload.title.trim().split(/[\\/]/).at(-1).replace(/\.[^.]+$/, "").replaceAll("_", " ")
+    : "Retrieved TB guidance";
+  const sourceIdentity = [
+    title,
+    payload.document_name,
+    payload.source_file,
+  ].filter(Boolean).join(" ");
+  if (/ntca.*teaching.*case|teaching.*case.*ntca/i.test(sourceIdentity)) return "The NTCA Teaching Cases";
+  return title;
+}
+
 export async function embedText(text, embedQuery) {
   if (typeof embedQuery !== "function") {
     throw new Error("The configured local query-embedding worker is not available.");
@@ -27,7 +40,7 @@ export async function searchGuidance({ embedQuery, qdrant, query }) {
     .map((result) => ({
       id: result.id,
       score: result.score,
-      title: result.payload.title || result.payload.document_name || result.payload.source_file || "Untitled source",
+      title: sourceTitle(result.payload),
       sourceFile: result.payload.source_file || result.payload.document_name || result.payload.document_id || "Unknown source",
       chunkIndex: result.payload.chunk_index ?? result.payload.parent_id ?? result.id,
       pageNumber: result.payload.page_number ?? result.payload.page,
@@ -51,13 +64,13 @@ export function mergeEvidence(primary, followUp) {
 export function formatEvidence(evidence) {
   if (evidence.length === 0) return "No matching guidance passages were found.";
   return evidence.map((item) => (
-    `[${item.reference}] ${item.title} (${item.sourceFile}, ${item.pageNumber ? `page ${item.pageNumber}` : `chunk ${item.chunkIndex}`})\n${item.text}`
+    `[${item.reference}] ${item.title} (${item.pageNumber ? `page ${item.pageNumber}` : "retrieved passage"})\n${item.text}`
   )).join("\n\n");
 }
 
 export function formatSourceList(evidence) {
   if (evidence.length === 0) return "";
   return `\n\nSources:\n${evidence.map((item) => (
-    `[${item.reference}] ${item.title} — ${item.sourceFile}, ${item.pageNumber ? `page ${item.pageNumber}` : `chunk ${item.chunkIndex}`}`
+    `[${item.reference}] ${item.title}${item.pageNumber ? `, page ${item.pageNumber}` : ""}`
   )).join("\n")}`;
 }
