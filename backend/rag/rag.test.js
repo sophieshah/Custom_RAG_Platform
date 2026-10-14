@@ -6,7 +6,7 @@ import { prepareAgentMessages } from "./agent.js";
 import { createChatRouter } from "./chat-router.js";
 import { chunkDocumentPages, chunkText, stablePointId } from "./documents.js";
 import { extractCase, formatDecisionSupport } from "./decision-support.js";
-import { searchGuidance } from "./retrieval.js";
+import { formatEvidence, formatSourceList, searchGuidance } from "./retrieval.js";
 import { QdrantClient } from "./qdrant.js";
 import { runRuleEngine } from "./rule-engine.js";
 import { logRagStep } from "./trace.js";
@@ -174,31 +174,60 @@ test("retrieval uses the configured local query embedding and the Python index p
 
   assert.deepEqual(queriedVector, [0.1, 0.2]);
   assert.equal(evidence[0].text, "Evidence from the Python PDF index.");
-  assert.equal(evidence[0].title, "Guideline.pdf");
+  assert.equal(evidence[0].title, "Retrieved TB guidance");
   assert.equal(evidence[0].sourceFile, "Guideline.pdf");
   assert.equal(evidence[0].pageNumber, 8);
+});
+
+test("retrieval uses the approved teaching-case citation name without exposing filenames", async () => {
+  const [retrieved] = await searchGuidance({
+    embedQuery: async () => [0.1, 0.2],
+    qdrant: {
+      search: async () => [{
+        id: "casebook-point",
+        score: 0.9,
+        payload: {
+          content: "A representative teaching case.",
+          source_file: "NTCA_TB_Isolation_Teaching_Cases_2_22_26.pdf",
+          page: 4,
+        },
+      }],
+    },
+    query: "community TB teaching cases",
+  });
+  const evidence = { ...retrieved, reference: "S1" };
+
+  assert.equal(evidence.title, "The NTCA Teaching Cases");
+  assert.match(formatEvidence([evidence]), /\[S1\] The NTCA Teaching Cases \(page 4\)/);
+  assert.match(formatSourceList([evidence]), /\[S1\] The NTCA Teaching Cases, page 4/);
+  assert.doesNotMatch(formatEvidence([evidence]), /2_22_26|\.pdf/);
+  assert.doesNotMatch(formatSourceList([evidence]), /2_22_26|\.pdf/);
 });
 
 test("agent performs one initial search and at most one model-requested follow-up", async () => {
   const embeddingInputs = [];
   let searchCount = 0;
+  let assessmentMessages;
   const openai = {
     chat: {
       completions: {
-        create: async () => ({
-          choices: [{
-            message: {
-              tool_calls: [{
-                id: "call-follow-up",
-                type: "function",
-                function: {
-                  name: "search_tb_guidance",
-                  arguments: JSON.stringify({ query: "isolation discontinuation criteria" }),
-                },
-              }],
-            },
-          }],
-        }),
+        create: async ({ messages }) => {
+          assessmentMessages = messages;
+          return {
+            choices: [{
+              message: {
+                tool_calls: [{
+                  id: "call-follow-up",
+                  type: "function",
+                  function: {
+                    name: "search_tb_guidance",
+                    arguments: JSON.stringify({ query: "isolation discontinuation criteria" }),
+                  },
+                }],
+              },
+            }],
+          };
+        },
       },
     },
   };
@@ -240,6 +269,13 @@ test("agent performs one initial search and at most one model-requested follow-u
     "isolation discontinuation criteria",
   ]);
   assert.deepEqual(result.evidence.map((item) => item.reference), ["S1", "S2"]);
+  assert.match(assessmentMessages[0].content, /educational public-health decision support/i);
+  assert.match(assessmentMessages[0].content, /Do not provide individual medical care/i);
+  assert.match(assessmentMessages[0].content, /specific file names|internal retrieval filenames/i);
+  assert.match(assessmentMessages[0].content, /financial security, social isolation, mental health, housing, food security/i);
+  assert.match(assessmentMessages[0].content, /community exposure-risk assessment/i);
+  assert.match(assessmentMessages[0].content, /Washington State/i);
+  assert.doesNotMatch(assessmentMessages.at(-1).content, /guideline\.pdf/);
 });
 
 test("chat route streams an answer followed by its source citation", async () => {
@@ -300,7 +336,7 @@ test("chat route streams an answer followed by its source citation", async () =>
     assert.match(response.headers.get("content-type"), /text\/plain/);
     assert.equal(
       await response.text(),
-      "Guidance summary.\n\nSources:\n[S1] TB Guideline — guideline.pdf, page 7",
+      "Guidance summary.\n\nSources:\n[S1] TB Guideline, page 7",
     );
   });
 
@@ -374,6 +410,55 @@ test("Python schema validation errors are returned instead of silently defaulted
   );
 });
 
+test("latest clarification reply overrides the stale structured-form value", async () => {
+  const caseData = await loadExampleCase();
+  caseData.community_risk = "moderate";
+  let extractionInstructions;
+  const openai = {
+    chat: {
+      completions: {
+        create: async (request) => {
+          extractionInstructions = request.messages[0].content;
+          return {
+            choices: [{
+              message: {
+                content: JSON.stringify({
+                  case: caseData,
+                  confirmed_unknown_fields: [],
+                  conflicted_fields: ["community_risk"],
+                }),
+              },
+            }],
+          };
+        },
+      },
+    },
+  };
+  const extraction = await extractCase({
+    openai,
+    model: "test-model",
+    request: {
+      message: "The community risk is moderate.",
+      patientContext: "",
+      structuredData: { communityRisk: "low" },
+      conversationHistory: [
+        {
+          role: "assistant",
+          content: [
+            "Before I can run the deterministic case rules, I need you to clarify:",
+            "1. What community contacts are anticipated outside the household or inner circle, how frequent are they, and what is the setting/ventilation? Would contacts include immunocompromised people or children under 10? Give a prospective community-risk level (low, moderate, high, or unknown) if assessed.",
+            "You can answer in one message.",
+          ].join("\n"),
+        },
+      ],
+    },
+  });
+
+  assert.equal(extraction.caseData.community_risk, "moderate");
+  assert.deepEqual(extraction.conflictedFields, []);
+  assert.match(extractionInstructions, /user's explicit answer to a pending clarification is definitive/i);
+});
+
 test("decision formatter directly answers from each deterministic rule status", () => {
   const base = {
     isolation_level: "moderate",
@@ -392,19 +477,19 @@ test("decision formatter directly answers from each deterministic rule status", 
     format("continue_to_conditional_target", {
       duration: { remaining_days_if_conditions_remain_met: 9 },
     }),
-    /Rule-engine answer: Continue moderate community restrictions to the rule engine's conditional treatment target\. The rule engine reports 9 verified effective treatment day\(s\) remain/,
+    /Deterministic tool result: Continue moderate community restrictions to the rule engine's conditional treatment target\. The rule engine reports 9 verified effective treatment day\(s\) remain/,
   );
   assert.match(
     format("hold_pending_reassessment", { duration: { reassess_within_days: 1 } }),
-    /Rule-engine answer: Maintain the moderate provisional hold pending reassessment\. Reassessment is due within 1 day/,
+    /Deterministic tool result: Maintain the moderate provisional hold pending reassessment\. Reassessment is due within 1 day/,
   );
   assert.match(
     format("eligible_to_discontinue_under_draft_policy"),
-    /Rule-engine answer: The rule engine classifies this case as eligible to discontinue community restrictions/,
+    /Deterministic tool result: The rule engine classifies this case as eligible to discontinue community restrictions/,
   );
   assert.match(
     format("no_community_restrictions", { isolation_level: "none" }),
-    /Rule-engine answer: The rule engine classifies this case as having no community restrictions/,
+    /Deterministic tool result: The rule engine classifies this case as having no community restrictions/,
   );
   assert.match(
     format("out_of_scope_provisional_hold", { isolation_level: "extensive" }),
@@ -466,6 +551,11 @@ test("structured extraction preserves explicit frontend form selections", async 
 test("decision route asks for unresolved required fields before evaluating rules", async () => {
   const caseData = await loadExampleCase();
   caseData.community_risk = "unknown";
+  caseData.smear = "unknown";
+  caseData.cavitation = "unknown";
+  caseData.extensive_radiographic_disease = "unknown";
+  caseData.cough = "unknown";
+  caseData.gxp_mtb = "unknown";
   let searches = 0;
   const openai = {
     chat: {
@@ -508,7 +598,10 @@ test("decision route asks for unresolved required fields before evaluating rules
 
     assert.equal(response.status, 200);
     const body = await response.text();
-    assert.match(body, /community exposure risk/i);
+    assert.match(body, /community contacts/i);
+    assert.match(body, /initial sputum smear/i);
+    assert.match(body, /chest imaging/i);
+    assert.match(body, /GeneXpert/i);
     assert.match(body, /run the deterministic case rules/i);
   });
 
@@ -516,7 +609,11 @@ test("decision route asks for unresolved required fields before evaluating rules
 });
 
 test("decision clarification replies are routed back into extraction and reach the rule engine", async () => {
-  const completeCase = { ...(await loadExampleCase()), community_risk: "moderate" };
+  const completeCase = {
+    ...(await loadExampleCase()),
+    community_risk: "moderate",
+    extensive_radiographic_disease: "no",
+  };
   const incompleteCase = { ...completeCase, community_risk: "unknown" };
   let classificationCalls = 0;
   let extractionCalls = 0;
@@ -576,7 +673,7 @@ test("decision clarification replies are routed back into extraction and reach t
     });
     const clarification = await firstResponse.text();
     assert.equal(firstResponse.status, 200);
-    assert.match(clarification, /community exposure risk/i);
+    assert.match(clarification, /community contacts/i);
 
     const followUpAnswer = "Community risk is moderate.";
     const secondResponse = await fetch(`${url}/api/chat`, {
@@ -592,7 +689,7 @@ test("decision clarification replies are routed back into extraction and reach t
     });
     const decision = await secondResponse.text();
     assert.equal(secondResponse.status, 200);
-    assert.match(decision, /^Decision:\nRule-engine answer:/);
+    assert.match(decision, /^Decision:\nDeterministic tool result:/);
     assert.match(decision, /Community risk: moderate/i);
     assert.doesNotMatch(decision, /Before I can run the deterministic case rules/);
   });
@@ -602,13 +699,16 @@ test("decision clarification replies are routed back into extraction and reach t
   assert.deepEqual(secondExtractionContext.pending_case_clarification.user_responses, [
     "Community risk is moderate.",
   ]);
-  assert.match(secondExtractionContext.pending_case_clarification.prompt, /community exposure risk/i);
+  assert.match(secondExtractionContext.pending_case_clarification.prompt, /community contacts/i);
 });
 
 test("decision route preserves Python rule output and adds evidence review/citations", async () => {
   const caseData = await loadExampleCase();
+  caseData.extensive_radiographic_disease = "no";
   const responseNames = [];
   let searchCount = 0;
+  let reviewInstructions = "";
+  let reviewInput;
   const openai = {
     chat: {
       completions: {
@@ -632,13 +732,15 @@ test("decision route preserves Python rule output and adds evidence review/citat
             };
           }
           if (name === "tb_decision_evidence_review") {
+            reviewInstructions = request.messages[0].content;
+            reviewInput = JSON.parse(request.messages[1].content);
             return {
               choices: [{
                 message: {
                   content: JSON.stringify({
                     assessment: "supported",
                     follow_up_query: "",
-                    summary: "The guidance is consistent.",
+                    summary: "The retrieved guidance supports continuing to the conditional target [S1].",
                   }),
                 },
               }],
@@ -675,18 +777,20 @@ test("decision route preserves Python rule output and adds evidence review/citat
 
     assert.equal(response.status, 200);
     const body = await response.text();
-    assert.match(body, /^Decision:\nRule-engine answer: Continue moderate community restrictions to the rule engine's conditional treatment target\./);
+    assert.match(body, /^Decision:\nDeterministic tool result: Continue moderate community restrictions to the rule engine's conditional treatment target\./);
     assert.match(body, /Classification: moderate \(status: continue_to_conditional_target\)/);
     assert.match(body, /Why\?\nThe deterministic rule engine classified the case as moderate under/);
     assert.match(body, /Restrict high-risk shared-air activities/);
     assert.match(body, /Known case facts:\n- /);
+    assert.match(body, /Case context: setting is community; respiratory tb is yes; pretreatment burden is high/);
     assert.match(body, /Unresolved criteria:\n/);
     assert.match(
       body,
-      /Evidence\nRetrieved guidance supports the rule-engine result \(continue_to_conditional_target\) and does not directly contradict it\. The rule engine has not established eligibility to discontinue restrictions\. The rule-engine result is unchanged\./,
+      /Evidence\nRetrieved guidance supports the rule-engine result \(continue_to_conditional_target\) and does not directly contradict it\. The rule engine has not established eligibility to discontinue restrictions\. The retrieved guidance supports continuing to the conditional target \[S1\]\./,
     );
-    assert.match(body, /Important\nThis is the deterministic rule-engine result and supporting evidence—not an independent clinical recommendation\./);
-    assert.match(body, /\[S1\] TB Guidance — guide\.pdf, page 12/);
+    assert.match(body, /Important\nThe deterministic result is one clinical decision-support tool output, not a binding or independently validated recommendation/);
+    assert.match(body, /\[S1\] TB Guidance, page 12/);
+    assert.doesNotMatch(body, /guide\.pdf/);
     assert.ok(body.indexOf("Decision:") < body.indexOf("Why?"));
     assert.ok(body.indexOf("Why?") < body.indexOf("Known case facts:"));
     assert.ok(body.indexOf("Known case facts:") < body.indexOf("Unresolved criteria:"));
@@ -695,14 +799,24 @@ test("decision route preserves Python rule output and adds evidence review/citat
   });
 
   assert.equal(searchCount, 1);
+  assert.match(reviewInstructions, /one clinical decision-support tool, not a binding final recommendation/i);
+  assert.match(reviewInstructions, /not be strictly constrained by it/i);
+  assert.match(reviewInstructions, /If the evidence-based assessment differs substantially/i);
+  assert.match(reviewInstructions, /financial security, social isolation, mental health, housing, food security/i);
+  assert.match(reviewInstructions, /initial sputum smear and imaging\/cavitation\/cough/i);
+  assert.match(reviewInstructions, /cite a numbered NTCA recommendation only when its number and substance appear in the retrieved evidence/i);
+  assert.equal(reviewInput.deterministic_rule_tool_result.result.decision_status, "continue_to_conditional_target");
+  assert.match(reviewInput.deterministic_rule_tool_result.context, /not a binding final recommendation/);
   assert.ok(responseNames.includes("tb_task_classification"));
   assert.ok(responseNames.includes("tb_case_extraction"));
 });
 
-test("decision evidence conflict triggers one follow-up retrieval without changing rule output", async () => {
+test("decision evidence conflict triggers one follow-up and presents the evidence-supported alternative", async () => {
   const caseData = await loadExampleCase();
+  caseData.extensive_radiographic_disease = "no";
   let searchCount = 0;
   let reviewCount = 0;
+  let reviewInstructions = "";
   const openai = {
     chat: {
       completions: {
@@ -726,13 +840,14 @@ test("decision evidence conflict triggers one follow-up retrieval without changi
           }
           if (name === "tb_decision_evidence_review") {
             reviewCount += 1;
+            reviewInstructions = request.messages[0].content;
             return {
               choices: [{
                 message: {
                   content: JSON.stringify({
                     assessment: "conflict",
                     follow_up_query: reviewCount === 1 ? "verify isolation duration guidance" : "",
-                    summary: "Source evidence conflicts with the draft rule.",
+                    summary: "The deterministic tool recommends continuing restrictions to the conditional target. The retrieved guidance instead supports reassessing whether targeted low-risk activities can resume, because it distinguishes those activities from high-risk shared-air contact [S2].",
                   }),
                 },
               }],
@@ -771,12 +886,17 @@ test("decision evidence conflict triggers one follow-up retrieval without changi
     const body = await response.text();
     assert.match(
       body,
-      /Retrieved guidance was assessed as directly conflicting with the rule-engine result \(continue_to_conditional_target\)\. The rule engine has not established eligibility to discontinue restrictions\. The rule-engine result is unchanged\./,
+      /Retrieved guidance was assessed as directly conflicting with the rule-engine result \(continue_to_conditional_target\)\. The rule engine has not established eligibility to discontinue restrictions\./,
     );
     assert.match(body, new RegExp(`Classification: ${expectedRuleResult.result.isolation_level}`));
+    assert.match(body, /The deterministic tool recommends continuing restrictions to the conditional target/);
+    assert.match(body, /retrieved guidance instead supports reassessing whether targeted low-risk activities can resume/);
+    assert.match(body, /high-risk shared-air contact \[S2\]/);
     assert.match(body, /\[S2\] TB Guideline/);
   });
 
   assert.equal(searchCount, 2);
   assert.equal(reviewCount, 2);
+  assert.match(reviewInstructions, /include the deterministic tool's result/i);
+  assert.match(reviewInstructions, /explain the reasoning for the evidence-supported alternative approaches/i);
 });
