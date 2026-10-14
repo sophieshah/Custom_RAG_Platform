@@ -1,115 +1,131 @@
 # TB Isolation Chatbot
 
-The existing React frontend is retained. Its chat requests continue to use `POST /api/chat` and stream plain text. The Express backend now routes general TB questions to Qdrant RAG and case-specific isolation questions through structured extraction, Python schema validation, the deterministic Python rule engine, and evidence review.
+The project has a React/Vite frontend and an Express backend. The backend routes general TB questions through Qdrant retrieval-augmented generation (RAG). Case-specific community-isolation questions go through structured case extraction, Python schema validation, the deterministic Python rule engine, and a separate review of retrieved guidance. The existing frontend talks to `POST /api/chat`; responses remain streamed plain text.
 
-> **Clinical safety:** the rules in `tb_isolation_rules_package/` identify themselves as a draft, not clinically validated policy. Their results are reproducible, not clinically certain. Do not use them to make patient-care decisions without review and approval by qualified TB clinicians and public-health authorities. The engine does not grant healthcare or congregate-facility clearance.
+> **Clinical safety:** the rules in `tb_isolation_rules_package/` are draft and not clinically validated. They produce reproducible tool outputs, not clinically certain recommendations. Do not use this application to make patient-care decisions without review and approval by qualified TB clinicians and public-health authorities. The rule engine does not grant healthcare or congregate-facility clearance.
 
-## Prerequisites
+## Requirements
 
+- Windows, macOS, or Linux
 - Node.js 20.16 or newer and npm
 - Python 3.10 or newer
-- Docker Desktop with Docker Compose, or a reachable Qdrant Cloud collection
-- An OpenAI API key for task classification, case extraction, and answer generation
-- The Python packages in `backend/requirements.txt` for local embeddings and PDF ingestion
+- Docker Desktop with Docker Compose, or an available Qdrant Cloud collection
+- An OpenAI API key for task classification, extraction, and answer/evidence review
+- Python packages from `backend/requirements.txt` for local embeddings and PDF ingestion
 
-The Qdrant collection must use the same local embedding model and vector dimension as document ingestion. The default is `intfloat/e5-large-v2`, 1024 dimensions. A local `.venv` is detected automatically; otherwise set `PYTHON_EXECUTABLE` in the environment or ensure `python` is on `PATH`.
+Qdrant must contain the guidance documents to be searched. Use the same embedding model and vector dimension for ingestion and query-time retrieval. Defaults: `intfloat/e5-large-v2` and 1024 dimensions. The backend detects a repository `.venv`; otherwise ensure Python is on `PATH` or configure `PYTHON_EXECUTABLE`.
 
-## Configure and start Qdrant
+## First-time setup
 
-At the repository root, copy the environment template if needed:
+Run the following from the repository root in PowerShell.
 
-```powershell
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
-```
+1. Install dependencies:
 
-Set `OPENAI_API_KEY` and `QDRANT_URL` in `.env`. For local development, use:
+   ```powershell
+   npm install
+   python -m venv .venv
+   .\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+   ```
 
-```env
-OPENAI_MODEL=gpt-4o-mini
-EMBEDDING_MODEL=intfloat/e5-large-v2
-EMBEDDING_DIMENSION=1024
-QDRANT_URL=http://127.0.0.1:6333
-QDRANT_COLLECTION=tb_guidance
-NODE_KNOWLEDGE_DIR=knowledge-base
-PORT=3001
-```
+2. Create the local environment file and edit it:
 
-Start local Qdrant:
+   ```powershell
+   if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+   ```
 
-```powershell
-docker compose up -d
-```
+   Set at least `OPENAI_API_KEY`. For local Qdrant, set these values in `.env`:
 
-The Qdrant data is stored in a named Docker volume. Cloud deployments should set the Qdrant URL and API key in the server environment; never put the key in frontend code.
+   ```env
+   OPENAI_MODEL=gpt-4o-mini
+   EMBEDDING_MODEL=intfloat/e5-large-v2
+   EMBEDDING_DIMENSION=1024
+   QDRANT_URL=http://127.0.0.1:6333
+   QDRANT_COLLECTION=tb_guidance
+   NODE_KNOWLEDGE_DIR=knowledge-base
+   PORT=3001
+   ```
 
-## Install dependencies and index guidance
+   For Qdrant Cloud, use your cloud URL and set `QDRANT_API_KEY`. Never put API keys in frontend code or commit `.env`.
 
-Install Node and Python packages:
+3. Start local Qdrant in a terminal:
 
-```powershell
-npm install
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
-```
+   ```powershell
+   docker compose up -d
+   ```
 
-The repository includes source PDFs in `documents/`. Index them with the existing Python PDF pipeline, which uses the same E5 embeddings as query-time retrieval:
+   Its data is kept in a named Docker volume.
 
-```powershell
-.\.venv\Scripts\python.exe backend\ingest.py documents
-```
+4. Index documents before asking evidence-based questions. The repository contains PDFs in `documents/`; index those with the Python ingestion pipeline:
 
-This PDF pipeline may use the configured OpenAI vision model when `ENABLE_VISION=true`; review its settings and costs before ingestion. For additional `.pdf`, `.md`, or `.txt` documents in `knowledge-base/` (the `NODE_KNOWLEDGE_DIR` default), the Node ingestion command uses the same local embedding worker:
+   ```powershell
+   .\.venv\Scripts\python.exe backend\ingest.py documents
+   ```
 
-```powershell
-npm run ingest
-```
+   Alternatively, put `.pdf`, `.md`, or `.txt` documents under `knowledge-base/` and run:
 
-Changing `EMBEDDING_MODEL` or `EMBEDDING_DIMENSION` requires re-indexing with that same model and dimension. The backend checks the Qdrant collection dimension and will fail startup on a mismatch rather than search with incompatible vectors.
+   ```powershell
+   npm run ingest
+   ```
+
+   Both ingestion paths must use the same collection, embedding model, and vector dimension as the running backend. The PDF pipeline can call the configured OpenAI vision model when `ENABLE_VISION=true`; check its settings and costs before using it. Changing `EMBEDDING_MODEL` or `EMBEDDING_DIMENSION` requires re-indexing the documents. The backend checks the collection dimension and fails startup if it does not match.
 
 ## Run the application
 
-Open two terminals at the repository root.
+Keep the Qdrant service running, then open two terminals at the repository root:
 
-Terminal 1 — backend:
+**Terminal 1 — backend API**
 
 ```powershell
 npm start
 ```
 
-At startup the API validates Qdrant and loads the local embedding model. Terminal 2 — unchanged React frontend:
+The backend listens on `http://localhost:3001`. Startup connects to Qdrant, checks the collection dimension, and starts the local embedding worker. Leave this terminal open.
+
+**Terminal 2 — frontend**
 
 ```powershell
 npm run dev
 ```
 
-Open the Vite URL printed in the terminal (normally `http://localhost:5173`). The API listens on `http://localhost:3001`.
+Open the Vite URL shown in the terminal (usually `http://localhost:5173`). Enter patient details in the form tabs and ask a question in the Decision-Support Agent tab. To stop the app, press `Ctrl+C` in each terminal; to stop local Qdrant, run `docker compose down` from the repository root.
 
-## Backend request flow
+## How the agent determines its output
 
-The current frontend request shape is preserved: `message`, `patientContext`, `structuredData`, and `conversationHistory`.
+The API first classifies each message as either a general guidance request or a case-specific community-isolation decision.
 
-1. The model classifies a turn as a case-specific isolation decision or a general guidance question.
-2. General questions follow the existing bounded RAG flow.
-3. For an isolation decision, the model extracts only user-provided facts into `tb_isolation_rules_package/input_schema.json`. Current form selections are preserved as explicit values.
-4. The case is validated and normalized by the Python rule package. Invalid fields produce an explicit service error; they are not converted into safe-looking defaults.
-5. Before evaluation, the backend asks follow-up questions for required values that are missing or conflicting. A reply to a pending rule-engine clarification is automatically routed back through case extraction; the exact prior question and user's follow-up replies are provided so short or numbered answers can be mapped to the requested fields. If a value is explicitly unknown, that uncertainty is passed to the rules.
-6. The Python engine produces the deterministic level, status, duration, blockers, and rule IDs. Only after that result exists does the backend retrieve Qdrant evidence. It may make one focused follow-up search if the evidence review finds a gap or conflict.
-7. Decision-support replies use fixed `Decision`, `Why?`, `Known case facts`, `Unresolved criteria`, `Evidence`, and `Important` sections. The `Decision` section translates the Python engine's status into a direct statement such as continuing restrictions to its conditional target, maintaining a provisional hold, or eligibility to discontinue under draft policy. The rationale and action come only from the rule result; evidence status is reported separately with retrieved citations. No generative answer step can replace or compete with the rule result.
+### General guidance question
 
-The backend currently invokes the Python rule bridge and uses a persistent local sentence-transformer worker. Patient context is supplied only for the active request; it is not added to the Qdrant knowledge collection.
+1. The backend embeds the question with the configured local sentence-transformer model and retrieves relevant passages from Qdrant.
+2. The answer model uses those retrieved passages and the shared public-health instructions to compose an educational answer with source citations. It may request one focused follow-up retrieval if the initial passages leave an important gap.
+3. If no relevant passages are found, the API returns a no-evidence response rather than inventing guidance. General RAG does not decide whether an individual patient's restrictions should start, continue, change, or end.
 
-In development, the backend writes `[tb-rag]` console traces for classification, extracted case fields, schema validation, deterministic rule results, RAG retrieval and evidence review, and the assembled response. Case details may contain sensitive health information; use synthetic cases for development and protect terminal output. These detailed traces are suppressed when `NODE_ENV=production` or `NODE_ENV=test`. The deterministic rule engine remains the sole source of case-specific isolation decisions; RAG only checks and reports supporting, insufficient, or conflicting evidence.
+### Case-specific isolation question
+
+1. **Extract and retain case facts.** For the first decision turn, the model maps only the user's narrative and form entries to the existing schema in `tb_isolation_rules_package/input_schema.json`. The backend maintains a canonical case object with a schema version, case version, confirmed unknowns, and conflicts. On later turns, a clarification updates only the fields asked about; the earlier narrative is not re-extracted and cannot silently overwrite a correction.
+2. **Validate and clarify.** The Python rule package validates and normalizes the case. If required facts are missing or conflicting, the chatbot asks focused follow-up questions and waits for a user reply. Explicitly unknown facts remain unknown; they are not guessed.
+3. **Run the deterministic rules.** Once the necessary fields are available, the Python rule engine evaluates the case and returns the deterministic classification, status, duration details, blockers, and rule identifiers. This output is kept distinct from the RAG evidence assessment.
+4. **Retrieve and independently assess guidance.** Qdrant retrieves relevant passages. A separate evidence-review step classifies whether those passages `supports`, `contradicts`, or `insufficient_to_assess` the rule-engine result. It must assess the passages independently rather than assume the rule result is correct. If the evidence is insufficient or contradictory, the backend can do one focused follow-up search and then reassess the combined evidence.
+5. **Assemble the response.** The answer is formatted into `Recommendation`, `Why this applies`, `What remains uncertain`, and `Guideline basis`, with only material case facts and citations to retrieved sources. If the evidence materially contradicts the rules, the system identifies the discrepancy and calls for clinical review; no validated conflict-resolution policy is configured, so it does not silently pick one source over the other. If evidence is insufficient, it says so.
+
+The ruleset is a decision-support tool, not ground truth or an independently validated clinical policy. Retrieved passages support or challenge that output but do not alter the recorded rule-engine result. Neither should be treated as a substitute for qualified clinical judgment. The model must not invent guideline titles, versions, recommendations, or source approval status that are not present in retrieved passages.
+
+## Operational notes
+
+- The frontend retains the canonical case state returned in the `X-TB-Case-State` response header and sends it on subsequent turns. The API continues to stream the user-facing response as plain text.
+- Patient context is sent for the active request and is not indexed in Qdrant.
+- In development, `[tb-rag]` console traces show task classification, case extraction/updates, validation, rule output, retrieval, evidence assessment, and response assembly. These may include sensitive health details: use synthetic cases and protect terminal output. Detailed traces are suppressed for `NODE_ENV=production` and `NODE_ENV=test`.
+- For Qdrant connection, model, or dimension errors, check `.env`, verify that Qdrant is reachable, and confirm that ingestion and runtime use the same collection and embedding configuration.
 
 ## Tests
 
-Run the Node/RAG/API tests and the deterministic rule-engine suite:
+Run the backend/API and Python rule-engine tests, and build the frontend:
 
 ```powershell
 npm test
 npm run build
 ```
 
-The rule package can also be tested directly:
+To run only the Python rule-engine tests:
 
 ```powershell
 python -m unittest discover -s tb_isolation_rules_package -p test_tb_isolation_rules.py

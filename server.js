@@ -17,7 +17,7 @@ if (!Number.isInteger(embeddingDimensions) || embeddingDimensions < 1) {
 }
 
 const app = express();
-app.use(cors());
+app.use(cors({ exposedHeaders: ["X-TB-Case-State"] }));
 app.use(express.json({ limit: "1mb" }));
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });

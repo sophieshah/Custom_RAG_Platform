@@ -8,6 +8,7 @@ import {
 import {
   classifyTask,
   prepareDecisionSupport,
+  validateCaseStateEnvelope,
 } from "./decision-support.js";
 import { logRagStep } from "./trace.js";
 
@@ -15,7 +16,13 @@ export function createChatRouter({ openai, qdrant, embedQuery, model }) {
   const router = express.Router();
 
   router.post("/api/chat", async (req, res) => {
-    const { message, patientContext, structuredData, conversationHistory = [] } = req.body || {};
+    const {
+      message,
+      patientContext,
+      structuredData,
+      conversationHistory = [],
+      caseState: suppliedCaseState,
+    } = req.body || {};
     if (typeof message !== "string" || !message.trim()) {
       return res.status(400).json({ error: "Message is required." });
     }
@@ -46,15 +53,26 @@ export function createChatRouter({ openai, qdrant, embedQuery, model }) {
     if (!Array.isArray(conversationHistory)) {
       return res.status(400).json({ error: "Conversation history must be an array." });
     }
+    let caseState;
+    if (suppliedCaseState !== undefined) {
+      try {
+        caseState = validateCaseStateEnvelope(suppliedCaseState);
+      } catch (error) {
+        return res.status(400).json({
+          error: error instanceof Error ? error.message : "Invalid canonical case state.",
+        });
+      }
+    }
 
     try {
-      const request = { message: message.trim(), patientContext, structuredData, conversationHistory };
+      const request = { message: message.trim(), patientContext, structuredData, conversationHistory, caseState };
       const task = await classifyTask({ openai, model, request });
       logRagStep("Task classification complete.", { task });
       if (task === "isolation_decision") {
         const decision = await prepareDecisionSupport({ openai, qdrant, embedQuery, model, request });
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.setHeader("Cache-Control", "no-cache, no-transform");
+        res.setHeader("X-TB-Case-State", Buffer.from(JSON.stringify(decision.caseState)).toString("base64url"));
 
         if (decision.kind === "clarification") {
           logRagStep("Overall response is a request for missing or conflicting case details.", {
