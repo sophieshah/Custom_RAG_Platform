@@ -15,6 +15,7 @@ export default function Chat({ onBackToHome }) {
     drugResistance: null,
   });
   const [messages, setMessages] = useState([]);
+  const [caseState, setCaseState] = useState(null);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [showSuggestedQuestions, setShowSuggestedQuestions] = useState(true);
@@ -56,6 +57,7 @@ export default function Chat({ onBackToHome }) {
       drugResistance: null,
     });
     setMessages([]);
+    setCaseState(null);
     setInput("");
     setActiveTab("narrative");
   };
@@ -130,7 +132,7 @@ export default function Chat({ onBackToHome }) {
         const chunk = decoder.decode(value, { stream: true });
         aiMessage.content += chunk;
         
-        if (isFirstChunk && aiMessage.content.trim().length > 0 && !aiMessage.content.includes('file_search')) {
+        if (isFirstChunk && aiMessage.content.trim().length > 0) {
           setHelpPanel(prev => ({
             ...prev,
             messages: [{ ...aiMessage }]
@@ -207,7 +209,7 @@ export default function Chat({ onBackToHome }) {
         const chunk = decoder.decode(value, { stream: true });
         aiMessage.content += chunk;
         
-        if (isFirstChunk && aiMessage.content.trim().length > 0 && !aiMessage.content.includes('file_search')) {
+        if (isFirstChunk && aiMessage.content.trim().length > 0) {
           setHelpPanel(prev => ({
             ...prev,
             messages: [...prev.messages.slice(0, -1), { ...aiMessage }]
@@ -269,11 +271,20 @@ export default function Chat({ onBackToHome }) {
           message: messageText,
           patientContext: patientContext,
           structuredData: structuredData,
-          conversationHistory: conversationHistory
+          conversationHistory: conversationHistory,
+          ...(caseState ? { caseState } : {})
         })
       });
 
       if (!res.ok) throw new Error("Backend error");
+      const encodedCaseState = res.headers.get("X-TB-Case-State");
+      if (encodedCaseState) {
+        const base64State = encodedCaseState.replace(/-/g, "+").replace(/_/g, "/");
+        const paddedState = base64State.padEnd(Math.ceil(base64State.length / 4) * 4, "=");
+        const binaryState = atob(paddedState);
+        const stateBytes = Uint8Array.from(binaryState, character => character.charCodeAt(0));
+        setCaseState(JSON.parse(new TextDecoder().decode(stateBytes)));
+      }
       
       await new Promise(resolve => setTimeout(resolve, 1500));
       
@@ -290,7 +301,7 @@ export default function Chat({ onBackToHome }) {
         const chunk = decoder.decode(value, { stream: true });
         aiMessage.content += chunk;
         
-        if (isFirstChunk && aiMessage.content.trim().length > 0 && !aiMessage.content.includes('file_search')) {
+        if (isFirstChunk && aiMessage.content.trim().length > 0) {
           setMessages(prev => [...prev.slice(0, -1), { ...aiMessage }]);
           isFirstChunk = false;
         } else if (!isFirstChunk) {

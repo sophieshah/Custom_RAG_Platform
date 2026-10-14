@@ -1,11 +1,16 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "description": "```bash npm init -y npm install express cors openai ```",
+  "description": "TB isolation decision-support chatbot with Qdrant-backed RAG",
   "main": "server.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "vite frontend --host 0.0.0.0",
+    "build": "vite build frontend",
+    "ingest": "node backend/rag/ingest.js",
+    "ingest:pdf": "python backend/ingest.py documents",
+    "test": "node --test backend/rag/rag.test.js && python -m unittest discover -s tb_isolation_rules_package -p test_tb_isolation_rules.py"
   },
   "keywords": [],
   "author": "",
@@ -14,6 +19,12 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
-    "openai": "^6.17.0"
+    "openai": "^6.17.0",
+    "pdf-parse": "^2.4.5",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5"
   }
 }

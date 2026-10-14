@@ -45,7 +45,10 @@ QDRANT_URL = os.getenv(
 
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
-COLLECTION_NAME = "tb_guidance"
+COLLECTION_NAME = os.getenv(
+    "QDRANT_COLLECTION",
+    "documents"
+)
 
 EMBEDDING_MODEL_NAME = os.getenv(
     "EMBEDDING_MODEL",
