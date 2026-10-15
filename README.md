@@ -89,6 +89,28 @@ npm run dev
 
 Open the Vite URL shown in the terminal (usually `http://localhost:5173`). Enter patient details in the form tabs and ask a question in the Decision-Support Agent tab. To stop the app, press `Ctrl+C` in each terminal; to stop local Qdrant, run `docker compose down` from the repository root.
 
+## Admin: upload documents and manage supplemental instructions
+
+Admin tools are disabled until credentials are configured. Add both of these values to `.env`, then restart the backend:
+
+```env
+ADMIN_USERNAME=your-admin-name
+ADMIN_PASSWORD=use-a-long-unique-password-of-at-least-14-characters
+ADMIN_DATA_DIR=data
+```
+
+Open the app homepage and select **Admin**, then sign in. Login is rate-limited; issued sessions expire after two hours and are kept in server memory, so a backend restart signs admins out. The browser keeps the session token only in memory. Use HTTPS and protect access to the server when deploying beyond local development.
+
+### Add documents to Qdrant
+
+In **Upload knowledge documents**, select one or more `.pdf`, `.md`, or `.txt` files (up to 20 MB each) and choose **Upload and index**. The backend processes each selected file, extracts text, chunks it, creates vectors with the configured local embedding model, and adds the chunks to the configured Qdrant collection. Uploaded source files are saved under `ADMIN_DATA_DIR/uploads`; the collection records the source as `admin_uploads/<filename>`. Uploading a file again with the same normalized filename updates its indexed chunks.
+
+### Add supplemental system instructions
+
+Use the **Supplemental system instructions** editor to add or replace optional guidance for the assistant. The text is saved on the backend under `ADMIN_DATA_DIR/admin-config.json` and applied to future chat requests, including general guidance, case extraction, and evidence review. Saving an empty editor removes the supplemental instructions.
+
+This editor does not replace or delete the built-in public-health instructions, evidence requirements, safety constraints, or deterministic case workflow. Supplemental content is explicitly subordinate to those mandatory policies. Keep instructions operational and concise; do not put secrets or patient information in this field.
+
 ## How the agent determines its output
 
 The API first classifies each message as either a general guidance request or a case-specific community-isolation decision.

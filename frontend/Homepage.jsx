@@ -1,7 +1,7 @@
 import React from "react";
 import "./homepage.css";
 
-export default function HomePage({ onGetStarted }) {
+export default function HomePage({ onGetStarted, onAdmin }) {
   return (
     <div className="homepage-container">
       <div className="homepage-content">
@@ -29,6 +29,11 @@ export default function HomePage({ onGetStarted }) {
         <button className="get-started-btn" onClick={onGetStarted}>
           Get Started
         </button>
+        {onAdmin && (
+          <button className="admin-entry-btn" onClick={onAdmin}>
+            Admin
+          </button>
+        )}
 
         {/* Resources Section */}
         <div className="resources-section">

@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { AdminConfigStore } from "./admin-config.js";
+import { createAdminRouter } from "./admin-router.js";
 import { prepareAgentMessages } from "./agent.js";
 import { createChatRouter } from "./chat-router.js";
 import { chunkDocumentPages, chunkText, stablePointId } from "./documents.js";
@@ -13,6 +17,7 @@ import {
 import { formatEvidence, formatSourceList, searchGuidance } from "./retrieval.js";
 import { QdrantClient } from "./qdrant.js";
 import { runRuleEngine } from "./rule-engine.js";
+import { withAdminInstructions } from "./system-instructions.js";
 import { logRagStep } from "./trace.js";
 
 if (!process.env.NODE_ENV) process.env.NODE_ENV = "test";
@@ -260,6 +265,7 @@ test("agent performs one initial search and at most one model-requested follow-u
       patientContext: "Sensitive patient detail",
       structuredData: {},
       conversationHistory: [],
+      additionalSystemInstructions: "Use short paragraphs for general explanations.",
       embedQuery: async (query) => {
         embeddingInputs.push(query);
         return [0.1, 0.2];
@@ -279,7 +285,129 @@ test("agent performs one initial search and at most one model-requested follow-u
   assert.match(assessmentMessages[0].content, /financial security, social isolation, mental health, housing, food security/i);
   assert.match(assessmentMessages[0].content, /community exposure-risk assessment/i);
   assert.match(assessmentMessages[0].content, /Washington State/i);
+  assert.match(assessmentMessages[0].content, /Use short paragraphs for general explanations/);
+  assert.match(assessmentMessages[0].content, /mandatory instructions above take precedence/i);
   assert.doesNotMatch(assessmentMessages.at(-1).content, /guideline\.pdf/);
+});
+
+test("administrator instructions are supplemental and cannot supersede required policies", () => {
+  const composed = withAdminInstructions("Mandatory grounding policy.", "Use concise headings.");
+  assert.ok(composed.indexOf("Mandatory grounding policy.") < composed.indexOf("Use concise headings."));
+  assert.match(composed, /mandatory instructions above take precedence/i);
+  assert.equal(withAdminInstructions("Mandatory grounding policy.", "  "), "Mandatory grounding policy.");
+});
+
+test("admin endpoints authenticate, save supplemental instructions, and index uploaded files", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "tb-admin-test-"));
+  const configStore = new AdminConfigStore({ directory });
+  const indexedPoints = new Map();
+  const app = express();
+  app.use(express.json());
+  app.locals.adminConfig = configStore;
+  app.locals.embeddingWorker = {
+    embedPassages: async (texts) => texts.map(() => [0.1, 0.2]),
+  };
+  app.locals.qdrant = {
+    upsert: async (points) => points.forEach((point) => indexedPoints.set(point.id, point)),
+    scrollBySource: async (sourceFile) => ({
+      points: [...indexedPoints.values()]
+        .filter((point) => point.payload.source_file === sourceFile)
+        .map((point) => ({ id: point.id })),
+      next_page_offset: null,
+    }),
+    deletePoints: async (ids) => ids.forEach((id) => indexedPoints.delete(id)),
+  };
+  app.use("/api/admin", createAdminRouter({
+    username: "operator",
+    password: "a-very-long-test-password",
+  }));
+
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+  const url = `http://127.0.0.1:${server.address().port}/api/admin`;
+  try {
+    const forbidden = await fetch(`${url}/instructions`);
+    assert.equal(forbidden.status, 401);
+
+    const loginResponse = await fetch(`${url}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "operator", password: "a-very-long-test-password" }),
+    });
+    assert.equal(loginResponse.status, 200);
+    const { token } = await loginResponse.json();
+    const headers = { Authorization: `Bearer ${token}` };
+
+    const saveResponse = await fetch(`${url}/instructions`, {
+      method: "PUT",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ additionalInstructions: "Use concise headings." }),
+    });
+    assert.equal(saveResponse.status, 200);
+    assert.equal(await configStore.getAdditionalInstructions(), "Use concise headings.");
+    const replaceInstructionsResponse = await fetch(`${url}/instructions`, {
+      method: "PUT",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ additionalInstructions: "Use concise headings and plain language." }),
+    });
+    assert.equal(replaceInstructionsResponse.status, 200);
+    assert.equal(
+      await configStore.getAdditionalInstructions(),
+      "Use concise headings and plain language.",
+    );
+
+    const unsupportedForm = new FormData();
+    unsupportedForm.append("file", new Blob(["executable-like content"]), "payload.exe");
+    const unsupportedResponse = await fetch(`${url}/documents`, {
+      method: "POST",
+      headers,
+      body: unsupportedForm,
+    });
+    assert.equal(unsupportedResponse.status, 400);
+    assert.equal(indexedPoints.size, 0);
+
+    const form = new FormData();
+    form.append("file", new Blob(["One paragraph of guidance for the retrieval index."]), "../quick-reference.txt");
+    const uploadResponse = await fetch(`${url}/documents`, {
+      method: "POST",
+      headers,
+      body: form,
+    });
+    assert.equal(uploadResponse.status, 200);
+    const uploadResult = await uploadResponse.json();
+    assert.equal(uploadResult.filename, "quick-reference.txt");
+    assert.equal(uploadResult.chunkCount, 1);
+    assert.equal(indexedPoints.size, 1);
+    assert.equal([...indexedPoints.values()][0].payload.source_file, "admin_uploads/quick-reference.txt");
+    assert.equal(
+      await readFile(path.join(directory, "uploads", "quick-reference.txt"), "utf8"),
+      "One paragraph of guidance for the retrieval index.",
+    );
+
+    const replacementForm = new FormData();
+    replacementForm.append("file", new Blob(["Updated guidance replaces the previous file contents."]), "quick-reference.txt");
+    const replacementResponse = await fetch(`${url}/documents`, {
+      method: "POST",
+      headers,
+      body: replacementForm,
+    });
+    assert.equal(replacementResponse.status, 200);
+    assert.equal(indexedPoints.size, 1);
+    assert.equal(
+      await readFile(path.join(directory, "uploads", "quick-reference.txt"), "utf8"),
+      "Updated guidance replaces the previous file contents.",
+    );
+
+    const logoutResponse = await fetch(`${url}/logout`, { method: "POST", headers });
+    assert.equal(logoutResponse.status, 204);
+    const loggedOut = await fetch(`${url}/instructions`, { headers });
+    assert.equal(loggedOut.status, 401);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("chat route streams an answer followed by its source citation", async () => {

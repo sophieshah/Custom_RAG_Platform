@@ -89,6 +89,21 @@
   transform: translateY(0);
 }
 
+.admin-entry-btn {
+  display: block;
+  margin: -35px auto 35px;
+  padding: 8px 18px;
+  color: #005fa3;
+  background: transparent;
+  border: 1px solid #007acc;
+  border-radius: 18px;
+  cursor: pointer;
+}
+
+.admin-entry-btn:hover {
+  background: #eef7fc;
+}
+
 /* Resources Section */
 .resources-section {
   margin-top: 50px;

@@ -12,7 +12,13 @@ import {
 } from "./decision-support.js";
 import { logRagStep } from "./trace.js";
 
-export function createChatRouter({ openai, qdrant, embedQuery, model }) {
+export function createChatRouter({
+  openai,
+  qdrant,
+  embedQuery,
+  model,
+  getAdditionalInstructions = async () => "",
+}) {
   const router = express.Router();
 
   router.post("/api/chat", async (req, res) => {
@@ -65,7 +71,14 @@ export function createChatRouter({ openai, qdrant, embedQuery, model }) {
     }
 
     try {
-      const request = { message: message.trim(), patientContext, structuredData, conversationHistory, caseState };
+      const request = {
+        message: message.trim(),
+        patientContext,
+        structuredData,
+        conversationHistory,
+        caseState,
+        additionalSystemInstructions: await getAdditionalInstructions(),
+      };
       const task = await classifyTask({ openai, model, request });
       logRagStep("Task classification complete.", { task });
       if (task === "isolation_decision") {

@@ -16,6 +16,15 @@ export function resolvePythonExecutable() {
   return existsSync(venvPython) ? venvPython : "python";
 }
 
+
+function sanitizeEmbeddingText(text) {
+  return text
+    .toWellFormed()
+    .replace(/\uFFFD/g, " ")
+    .trim();
+}
+
+
 export class LocalEmbeddingWorker {
   constructor({ pythonExecutable = resolvePythonExecutable() } = {}) {
     this.pythonExecutable = pythonExecutable;
@@ -124,13 +133,19 @@ export class LocalEmbeddingWorker {
     }
   }
 
+  
   async embedQueries(texts) {
-    return this.embed(texts.map((text) => `query: ${text}`));
+    return this.embed(
+      texts.map((text) => `query: ${sanitizeEmbeddingText(text)}`)
+    );
   }
 
   async embedPassages(texts) {
-    return this.embed(texts.map((text) => `passage: ${text}`));
+    return this.embed(
+      texts.map((text) => `passage: ${sanitizeEmbeddingText(text)}`)
+    );
   }
+
 
   async embed(texts) {
     await this.start();
