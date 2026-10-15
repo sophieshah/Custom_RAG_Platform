@@ -513,7 +513,10 @@ test("decision formatter directly answers from each deterministic rule status", 
       conflictedFields: [],
     },
     result: { ...base, decision_status, ...result },
-    review: { assessment: "supports" },
+    review: {
+      assessment: "supports",
+      direct_answer: "Yes, the tool supports continuing moderate restrictions to its conditional target.",
+    },
     evidence: [],
   });
 
@@ -521,7 +524,7 @@ test("decision formatter directly answers from each deterministic rule status", 
     format("continue_to_conditional_target", {
       duration: { remaining_days_if_conditions_remain_met: 9 },
     }),
-    /## Recommendation\nThe deterministic tool result is: Continue moderate community restrictions to the rule engine's conditional treatment target\. The rule engine reports 9 verified effective treatment day\(s\) remain/,
+    /## Recommendation\nYes, the tool supports continuing moderate restrictions to its conditional target\. The deterministic tool result is: Continue moderate community restrictions to the rule engine's conditional treatment target\. The rule engine reports 9 verified effective treatment day\(s\) remain/,
   );
   assert.match(
     format("hold_pending_reassessment", { duration: { reassess_within_days: 1 } }),
@@ -769,33 +772,72 @@ test("case clarification patches only requested canonical fields and returns the
   ].join("\n");
   let updateInput;
   let updateInstructions;
+  let reviewQuestion;
+  let retrievalQuery;
   const openai = {
     chat: {
       completions: {
         create: async (request) => {
           const name = request.response_format?.json_schema?.name;
-          assert.equal(name, "tb_case_update");
-          updateInstructions = request.messages[0].content;
-          updateInput = JSON.parse(request.messages[1].content);
-          return {
-            choices: [{
-              message: {
-                content: JSON.stringify({
-                  updates: { community_risk: "moderate" },
-                  updated_fields: ["community_risk"],
-                  confirmed_unknown_fields: [],
-                  conflicted_fields: [],
-                }),
-              },
-            }],
-          };
+          if (name === "tb_case_update") {
+            updateInstructions = request.messages[0].content;
+            updateInput = JSON.parse(request.messages[1].content);
+            return {
+              choices: [{
+                message: {
+                  content: JSON.stringify({
+                    updates: { community_risk: "moderate" },
+                    updated_fields: ["community_risk"],
+                    confirmed_unknown_fields: [],
+                    conflicted_fields: [],
+                  }),
+                },
+              }],
+            };
+          }
+          if (name === "tb_decision_evidence_review") {
+            reviewQuestion = JSON.parse(request.messages[1].content).user_question;
+            return {
+              choices: [{
+                message: {
+                  content: JSON.stringify({
+                    assessment: "supports",
+                    direct_answer: "The tool supports continuing restrictions to its conditional target.",
+                    follow_up_query: "",
+                    summary: "The retrieved passage supports that comparison [S1].",
+                  }),
+                },
+              }],
+            };
+          }
+          throw new Error(`Unexpected model call: ${name}`);
         },
       },
     },
   };
-  const qdrant = { search: async () => [] };
+  const qdrant = {
+    search: async () => {
+      return [{
+        id: "canonical-case-guidance",
+        score: 0.9,
+        payload: {
+          text: "Guidance passage.",
+          source_file: "guidance.pdf",
+          title: "TB Guidance",
+          chunk_index: 1,
+        },
+      }];
+    },
+  };
 
-  await withChatServer({ openai, qdrant }, async (url) => {
+  await withChatServer({
+    openai,
+    qdrant,
+    embedQuery: async (query) => {
+      retrievalQuery = query;
+      return [0.1, 0.2];
+    },
+  }, async (url) => {
     const response = await fetch(`${url}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -804,7 +846,10 @@ test("case clarification patches only requested canonical fields and returns the
         patientContext: "Stale narrative says community risk is high.",
         structuredData: { communityRisk: "High" },
         caseState,
-        conversationHistory: [{ role: "assistant", content: clarification }],
+        conversationHistory: [
+          { role: "user", content: "When can this patient stop community restrictions?" },
+          { role: "assistant", content: clarification },
+        ],
       }),
     });
 
@@ -823,6 +868,8 @@ test("case clarification patches only requested canonical fields and returns the
   assert.equal(updateInput.canonical_case.pretreatment_burden, caseData.pretreatment_burden);
   assert.match(updateInstructions, /never re-extract or overwrite it from prior conversation or patient narrative/i);
   assert.doesNotMatch(JSON.stringify(updateInput), /Stale narrative/);
+  assert.equal(reviewQuestion, "When can this patient stop community restrictions?");
+  assert.match(retrievalQuery, /When can this patient stop community restrictions/i);
 });
 
 test("decision route preserves Python rule output and adds evidence review/citations", async () => {
@@ -862,6 +909,7 @@ test("decision route preserves Python rule output and adds evidence review/citat
                 message: {
                   content: JSON.stringify({
                     assessment: "supports",
+                    direct_answer: "Yes. Continue restrictions to the tool's conditional target.",
                     follow_up_query: "",
                     summary: "The retrieved guidance supports continuing to the conditional target [S1].",
                   }),
@@ -900,7 +948,7 @@ test("decision route preserves Python rule output and adds evidence review/citat
 
     assert.equal(response.status, 200);
     const body = await response.text();
-    assert.match(body, /^## Recommendation\nThe deterministic tool result is: Continue moderate community restrictions to the rule engine's conditional treatment target\./);
+    assert.match(body, /^## Recommendation\nYes\. Continue restrictions to the tool's conditional target\. The deterministic tool result is: Continue moderate community restrictions to the rule engine's conditional treatment target\./);
     assert.match(body, /## Why this applies\nThe decision tool classified this case as moderate\./);
     assert.match(body, /Restrict high-risk shared-air activities/);
     assert.match(body, /Material case facts:/);
@@ -922,6 +970,8 @@ test("decision route preserves Python rule output and adds evidence review/citat
   assert.match(reviewInstructions, /initial sputum smear and imaging\/cavitation\/cough/i);
   assert.match(reviewInstructions, /independently assess the supplied passages/i);
   assert.match(reviewInstructions, /supports, contradicts, or insufficient_to_assess/i);
+  assert.match(reviewInstructions, /direct_answer as the very first user-facing answer/i);
+  assert.equal(reviewInput.user_question, "Should the patient continue community restrictions?");
   assert.equal(reviewInput.deterministic_rule_tool_result.result.decision_status, "continue_to_conditional_target");
   assert.match(reviewInput.deterministic_rule_tool_result.context, /not a binding final recommendation/);
   assert.ok(responseNames.includes("tb_task_classification"));
@@ -963,6 +1013,7 @@ test("decision evidence conflict triggers one follow-up and escalates without ch
                 message: {
                   content: JSON.stringify({
                     assessment: "contradicts",
+                    direct_answer: "The retrieved guidance conflicts with the rule-engine result.",
                     follow_up_query: reviewCount === 1 ? "verify isolation duration guidance" : "",
                     summary: "The deterministic tool recommends continuing restrictions to the conditional target. The retrieved guidance instead supports reassessing whether targeted low-risk activities can resume, because it distinguishes those activities from high-risk shared-air contact [S2].",
                   }),
