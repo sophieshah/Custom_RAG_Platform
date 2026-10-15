@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
 import "./chat.css";
 
 export default function Chat({ onBackToHome }) {
@@ -686,7 +687,9 @@ export default function Chat({ onBackToHome }) {
                       <ThinkingDots />
                     </span>
                   ) : (
-                    msg.content
+                    msg.role === "assistant"
+                      ? <ReactMarkdown>{msg.content}</ReactMarkdown>
+                      : msg.content
                   )}
                 </div>
               ))}
@@ -778,7 +781,9 @@ export default function Chat({ onBackToHome }) {
                     <ThinkingDots />
                   </span>
                 ) : (
-                  msg.content
+                  msg.role === "assistant"
+                    ? <ReactMarkdown>{msg.content}</ReactMarkdown>
+                    : msg.content
                 )}
               </div>
             ))}
