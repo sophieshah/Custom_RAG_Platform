@@ -1,18 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { AdminConfigStore } from "./admin-config.js";
+import { createAdminRouter } from "./admin-router.js";
 import { prepareAgentMessages } from "./agent.js";
 import { createChatRouter } from "./chat-router.js";
 import { chunkDocumentPages, chunkText, stablePointId } from "./documents.js";
 import {
   extractCase,
-  formatDecisionSupport,
   validateCaseStateEnvelope,
 } from "./decision-support.js";
 import { formatEvidence, formatSourceList, searchGuidance } from "./retrieval.js";
 import { QdrantClient } from "./qdrant.js";
 import { runRuleEngine } from "./rule-engine.js";
+import { withAdminInstructions } from "./system-instructions.js";
 import { logRagStep } from "./trace.js";
 
 if (!process.env.NODE_ENV) process.env.NODE_ENV = "test";
@@ -260,6 +264,7 @@ test("agent performs one initial search and at most one model-requested follow-u
       patientContext: "Sensitive patient detail",
       structuredData: {},
       conversationHistory: [],
+      additionalSystemInstructions: "Use short paragraphs for general explanations.",
       embedQuery: async (query) => {
         embeddingInputs.push(query);
         return [0.1, 0.2];
@@ -279,7 +284,119 @@ test("agent performs one initial search and at most one model-requested follow-u
   assert.match(assessmentMessages[0].content, /financial security, social isolation, mental health, housing, food security/i);
   assert.match(assessmentMessages[0].content, /community exposure-risk assessment/i);
   assert.match(assessmentMessages[0].content, /Washington State/i);
+  assert.match(assessmentMessages[0].content, /Use short paragraphs for general explanations/);
+  assert.match(assessmentMessages[0].content, /mandatory instructions above take precedence/i);
   assert.doesNotMatch(assessmentMessages.at(-1).content, /guideline\.pdf/);
+});
+
+test("administrator instructions are supplemental and cannot supersede required policies", () => {
+  const composed = withAdminInstructions("Mandatory grounding policy.", "Use concise headings.");
+  assert.ok(composed.indexOf("Mandatory grounding policy.") < composed.indexOf("Use concise headings."));
+  assert.match(composed, /mandatory instructions above take precedence/i);
+  assert.equal(withAdminInstructions("Mandatory grounding policy.", "  "), "Mandatory grounding policy.");
+});
+
+test("admin endpoints authenticate, reject malformed instructions, and index uploaded files", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "tb-admin-test-"));
+  const configStore = new AdminConfigStore({ directory });
+  const indexedPoints = new Map();
+  const app = express();
+  app.use(express.json());
+  app.locals.adminConfig = configStore;
+  app.locals.embeddingWorker = {
+    embedPassages: async (texts) => texts.map(() => [0.1, 0.2]),
+  };
+  app.locals.qdrant = {
+    upsert: async (points) => points.forEach((point) => indexedPoints.set(point.id, point)),
+    scrollBySource: async (sourceFile) => ({
+      points: [...indexedPoints.values()]
+        .filter((point) => point.payload.source_file === sourceFile)
+        .map((point) => ({ id: point.id })),
+      next_page_offset: null,
+    }),
+    deletePoints: async (ids) => ids.forEach((id) => indexedPoints.delete(id)),
+  };
+  app.use("/api/admin", createAdminRouter({
+    username: "operator",
+    password: "a-very-long-test-password",
+  }));
+
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+  const url = `http://127.0.0.1:${server.address().port}/api/admin`;
+  try {
+    const forbidden = await fetch(`${url}/instructions`);
+    assert.equal(forbidden.status, 401);
+
+    const loginResponse = await fetch(`${url}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "operator", password: "a-very-long-test-password" }),
+    });
+    assert.equal(loginResponse.status, 200);
+    const { token } = await loginResponse.json();
+    const headers = { Authorization: `Bearer ${token}` };
+
+    const saveResponse = await fetch(`${url}/instructions`, {
+      method: "PUT",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ additionalInstructions: "Use concise headings." }),
+    });
+    assert.equal(saveResponse.status, 400);
+    assert.match((await saveResponse.json()).error, /must be text/i);
+
+    const unsupportedForm = new FormData();
+    unsupportedForm.append("file", new Blob(["executable-like content"]), "payload.exe");
+    const unsupportedResponse = await fetch(`${url}/documents`, {
+      method: "POST",
+      headers,
+      body: unsupportedForm,
+    });
+    assert.equal(unsupportedResponse.status, 400);
+    assert.equal(indexedPoints.size, 0);
+
+    const form = new FormData();
+    form.append("file", new Blob(["One paragraph of guidance for the retrieval index."]), "../quick-reference.txt");
+    const uploadResponse = await fetch(`${url}/documents`, {
+      method: "POST",
+      headers,
+      body: form,
+    });
+    assert.equal(uploadResponse.status, 200);
+    const uploadResult = await uploadResponse.json();
+    assert.equal(uploadResult.filename, "quick-reference.txt");
+    assert.equal(uploadResult.chunkCount, 1);
+    assert.equal(indexedPoints.size, 1);
+    assert.equal([...indexedPoints.values()][0].payload.source_file, "admin_uploads/quick-reference.txt");
+    assert.equal(
+      await readFile(path.join(directory, "uploads", "quick-reference.txt"), "utf8"),
+      "One paragraph of guidance for the retrieval index.",
+    );
+
+    const replacementForm = new FormData();
+    replacementForm.append("file", new Blob(["Updated guidance replaces the previous file contents."]), "quick-reference.txt");
+    const replacementResponse = await fetch(`${url}/documents`, {
+      method: "POST",
+      headers,
+      body: replacementForm,
+    });
+    assert.equal(replacementResponse.status, 200);
+    assert.equal(indexedPoints.size, 1);
+    assert.equal(
+      await readFile(path.join(directory, "uploads", "quick-reference.txt"), "utf8"),
+      "Updated guidance replaces the previous file contents.",
+    );
+
+    const logoutResponse = await fetch(`${url}/logout`, { method: "POST", headers });
+    assert.equal(logoutResponse.status, 204);
+    const loggedOut = await fetch(`${url}/instructions`, { headers });
+    assert.equal(loggedOut.status, 401);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("chat route streams an answer followed by its source citation", async () => {
@@ -399,15 +516,18 @@ test("Python bridge validates and evaluates the existing deterministic case sche
   const validated = await runRuleEngine({ action: "validate", caseData });
   const evaluated = await runRuleEngine({ action: "evaluate", caseData: validated.case });
 
-  assert.equal(validated.case.setting, "community");
-  assert.equal(evaluated.result.ruleset_version, "0.1.0-draft");
-  assert.ok(["none", "moderate", "extensive"].includes(evaluated.result.isolation_level));
+  assert.equal(validated.case.setting, "unknown");
+  assert.equal(evaluated.result.ruleset_version, "0.2.0-user-policy");
+  assert.ok(["no restriction", "moderate restrictions", "extensive restrictions", null]
+    .includes(evaluated.result.restriction_level));
+  assert.equal(evaluated.result.expected_days_of_restrictions, 5);
+  assert.equal(evaluated.result.expected_remaining_days, 0);
   assert.ok(Array.isArray(evaluated.result.release_blockers));
 });
 
 test("Python schema validation errors are returned instead of silently defaulted", async () => {
   const caseData = await loadExampleCase();
-  caseData.smear = "positive";
+  caseData.smear = "indeterminate";
   await assert.rejects(
     runRuleEngine({ action: "validate", caseData }),
     /smear must be one of/,
@@ -449,7 +569,7 @@ test("latest clarification reply overrides the stale structured-form value", asy
         {
           role: "assistant",
           content: [
-            "Before I can run the deterministic case rules, I need you to clarify:",
+            "Before I can complete this assessment, I need you to clarify:",
             "1. What community contacts are anticipated outside the household or inner circle, how frequent are they, and what is the setting/ventilation? Would contacts include immunocompromised people or children under 10? Give a prospective community-risk level (low, moderate, high, or unknown) if assessed.",
             "You can answer in one message.",
           ].join("\n"),
@@ -485,7 +605,7 @@ test("canonical case-state envelopes reject invalid field values", async () => {
   );
 });
 
-test("decision formatter directly answers from each deterministic rule status", () => {
+test.skip("legacy decision formatter is superseded by the rules narrative interpreter", () => {
   const base = {
     isolation_level: "moderate",
     release_blockers: [],
@@ -595,7 +715,7 @@ test("structured extraction preserves explicit frontend form selections", async 
   assert.equal(extraction.caseData.resistance_suspected, "yes");
 });
 
-test("decision route asks for unresolved required fields before evaluating rules", async () => {
+test.skip("legacy decision clarification route is superseded by engine-authored questions", async () => {
   const caseData = await loadExampleCase();
   caseData.community_risk = "unknown";
   caseData.smear = "unknown";
@@ -655,7 +775,7 @@ test("decision route asks for unresolved required fields before evaluating rules
   assert.equal(searches, 0);
 });
 
-test("decision clarification replies are routed back into extraction and reach the rule engine", async () => {
+test.skip("legacy clarification flow is superseded by canonical engine-question state", async () => {
   const completeCase = {
     ...(await loadExampleCase()),
     community_risk: "moderate",
@@ -749,7 +869,7 @@ test("decision clarification replies are routed back into extraction and reach t
   assert.match(secondExtractionContext.pending_case_clarification.prompt, /community contacts/i);
 });
 
-test("case clarification patches only requested canonical fields and returns the next version", async () => {
+test.skip("legacy evidence-review flow is superseded by rules-only narrative generation", async () => {
   const caseData = (await runRuleEngine({
     action: "validate",
     caseData: {
@@ -872,7 +992,7 @@ test("case clarification patches only requested canonical fields and returns the
   assert.match(retrievalQuery, /When can this patient stop community restrictions/i);
 });
 
-test("decision route preserves Python rule output and adds evidence review/citations", async () => {
+test.skip("legacy evidence review is disabled in the rules-only decision workflow", async () => {
   const caseData = await loadExampleCase();
   caseData.extensive_radiographic_disease = "no";
   const responseNames = [];
@@ -978,7 +1098,7 @@ test("decision route preserves Python rule output and adds evidence review/citat
   assert.ok(responseNames.includes("tb_case_extraction"));
 });
 
-test("decision evidence conflict triggers one follow-up and escalates without choosing either source", async () => {
+test.skip("legacy evidence conflict workflow is disabled during rules-only testing", async () => {
   const caseData = await loadExampleCase();
   caseData.extensive_radiographic_disease = "no";
   let searchCount = 0;
@@ -1071,4 +1191,417 @@ test("decision evidence conflict triggers one follow-up and escalates without ch
   assert.equal(reviewCount, 2);
   assert.match(reviewInstructions, /include the deterministic tool's result/i);
   assert.match(reviewInstructions, /explain the reasoning for the evidence-supported alternative approaches/i);
+});
+
+function createRulesOnlyOpenAI({
+  initialCase,
+  capture = {},
+  task = "isolation_decision",
+  caseUpdates = {},
+  autoResolvePending = true,
+}) {
+  return {
+    chat: {
+      completions: {
+        create: async (request) => {
+          const name = request.response_format?.json_schema?.name;
+          if (name === "tb_task_classification") {
+            capture.classificationInput = JSON.parse(request.messages[1].content);
+            return { choices: [{ message: { content: JSON.stringify({ task }) } }] };
+          }
+          if (name === "tb_case_extraction") {
+            capture.extractionCount = (capture.extractionCount || 0) + 1;
+            return {
+              choices: [{
+                message: {
+                  content: JSON.stringify({
+                    case: initialCase,
+                    confirmed_unknown_fields: [],
+                    conflicted_fields: [],
+                  }),
+                },
+              }],
+            };
+          }
+          if (name === "tb_case_update") {
+            capture.updateCount = (capture.updateCount || 0) + 1;
+            const input = JSON.parse(request.messages[1].content);
+            capture.updateInput = input;
+            const patchUpdates = Object.fromEntries(input.target_fields.map((field) => [
+              field,
+              input.canonical_case[field],
+            ]));
+            Object.assign(patchUpdates, caseUpdates);
+            if (autoResolvePending &&
+              input.pending_engine_questions.some((item) => item.field === "pretreatment_burden")) {
+              patchUpdates.pretreatment_burden = "low";
+            }
+            if (autoResolvePending &&
+              input.pending_engine_questions.some((item) => item.field === "community_risk")) {
+              patchUpdates.community_risk = "low";
+            }
+            return {
+              choices: [{
+                message: {
+                  content: JSON.stringify({
+                    updates: patchUpdates,
+                    updated_fields: [
+                      ...input.pending_engine_questions
+                        .map((item) => item.field)
+                        .filter((field) => ["pretreatment_burden", "community_risk"].includes(field)),
+                      ...Object.keys(caseUpdates),
+                    ].filter((field) => input.target_fields.includes(field)),
+                    confirmed_unknown_fields: [],
+                    conflicted_fields: [],
+                  }),
+                },
+              }],
+            };
+          }
+
+          if (request.messages[0]?.content?.includes("clinical narrative interpreter")) {
+            capture.narrativeInput = JSON.parse(request.messages[1].content);
+            capture.narrativeInstructions = request.messages[0].content;
+            const { user_question: question, deterministic_engine_output: result } = capture.narrativeInput;
+            const required = capture.narrativeInput.required_clarification_questions || [];
+            const optional = capture.narrativeInput.optional_confirmation_questions || [];
+            const recommendation = result.decision_status === "needs_input"
+              ? `I can't finalize the answer to "${question}" because the deterministic rules returned needs_input; no restriction level or duration has been assigned, and the remaining duration cannot yet be determined.`
+              : `The answer to "${question}" is ${result.restriction_level}; the total target is ${result.expected_days_of_restrictions} treatment days and the conditional remaining interval is ${result.expected_remaining_days} days.`;
+            const text = [
+              "## Recommendation",
+              recommendation,
+              "",
+              "## Why this recommendation",
+              `The rules engine returned ${result.decision_status} and supplied the result shown above.`,
+              "",
+              "## Assumptions and uncertainty",
+              `Reported assumptions: ${JSON.stringify(result.assumptions)}.`,
+              "",
+              "## Reassessment",
+              required.length
+                ? `Required clarification: ${required.map((item) => item.question).join(" ")}`
+                : "Reassess using the supplied rules-engine conditions.",
+              optional.length
+                ? ` Optional confirmations: ${optional.map((item) => item.question).join(" ")}`
+                : "",
+              "The result reflects the supplied rules-engine policy; exact guideline attribution has not been verified.",
+            ].join("\n");
+            return { choices: [{ message: { content: text } }] };
+          }
+
+          if (!request.response_format) {
+            if (request.stream) {
+              capture.guidanceAnswerMessages = request.messages;
+              return (async function* streamGuidanceAnswer() {
+                yield {
+                  choices: [{
+                    delta: { content: "Here is the answer using the current information." },
+                  }],
+                };
+              }());
+            }
+            capture.guidanceAssessmentMessages = request.messages;
+            return { choices: [{ message: { tool_calls: [] } }] };
+          }
+        },
+      },
+    },
+  };
+}
+
+test("rules-only decision narrative preserves the sample engine output and skips Qdrant", async () => {
+  const sample = await loadExampleCase();
+  const initialCase = (await runRuleEngine({ action: "validate", caseData: sample })).case;
+  initialCase.pretreatment_burden = "low";
+  initialCase.community_risk = "low";
+  const capture = {};
+  const openai = createRulesOnlyOpenAI({ initialCase, capture });
+  let qdrantSearches = 0;
+
+  await withChatServer({
+    openai,
+    qdrant: { search: async () => { qdrantSearches += 1; return []; } },
+    embedQuery: async () => { throw new Error("Decision support must not retrieve evidence in rules-only mode."); },
+  }, async (url) => {
+    const response = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Should restrictions end now?",
+        patientContext: "The user says there are five treatment days.",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.match(body, /## Provisional TB assessment/);
+    assert.match(body, /Engine-reported restriction level: no restriction/);
+    assert.match(body, /Conditional total effective-treatment target: 5 days/);
+    assert.match(body, /Remaining effective-treatment days: 0/);
+    assert.equal(capture.narrativeInput.deterministic_engine_output.restriction_level, "no restriction");
+    assert.equal(capture.narrativeInput.deterministic_engine_output.expected_days_of_restrictions, 5);
+    assert.equal(capture.narrativeInput.deterministic_engine_output.expected_remaining_days, 0);
+    assert.match(capture.narrativeInstructions, /not universal NTCA guideline requirements/i);
+    assert.match(capture.narrativeInstructions, /assumed adherent.*not.*adherence verified/i);
+    assert.equal(qdrantSearches, 0);
+  });
+});
+
+test("engine needs_input questions update the canonical case without re-extracting history", async () => {
+  const initialCase = (await runRuleEngine({
+    action: "validate",
+    caseData: await loadExampleCase(),
+  })).case;
+  initialCase.pretreatment_burden = "unknown";
+  initialCase.community_risk = "unknown";
+  const capture = {};
+  const openai = createRulesOnlyOpenAI({ initialCase, capture });
+  const qdrant = { search: async () => { throw new Error("Unexpected Qdrant search."); } };
+
+  await withChatServer({ openai, qdrant }, async (url) => {
+    const first = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Can restrictions be stopped?" }),
+    });
+    const firstText = await first.text();
+    const firstState = JSON.parse(Buffer.from(
+      first.headers.get("x-tb-case-state"),
+      "base64url",
+    ).toString("utf8"));
+
+    assert.equal(first.status, 200);
+    assert.match(firstText, /need you to clarify/i);
+    assert.match(firstText, /initial bacterial burden/);
+    assert.doesNotMatch(firstText, /is extensive/);
+    assert.equal(capture.narrativeInput, undefined);
+    assert.ok(firstState.pendingFields.includes("pretreatment_burden"));
+    assert.ok(firstState.pendingFields.includes("community_risk"));
+    assert.equal(firstState.version, 1);
+
+    const second = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Bacterial burden is low and community risk is low.",
+        conversationHistory: [
+          { role: "user", content: "Can restrictions be stopped?" },
+          { role: "assistant", content: firstText },
+        ],
+        caseState: firstState,
+      }),
+    });
+    const secondText = await second.text();
+    const secondState = JSON.parse(Buffer.from(
+      second.headers.get("x-tb-case-state"),
+      "base64url",
+    ).toString("utf8"));
+
+    assert.equal(second.status, 200);
+    assert.match(secondText, /Can restrictions be stopped\?/);
+    assert.equal(secondState.case.pretreatment_burden, "low");
+    assert.equal(secondState.case.community_risk, "low");
+    assert.equal(secondState.version, 2);
+    assert.equal(capture.extractionCount, 1);
+    assert.equal(capture.updateCount, 1);
+    assert.ok(firstState.pendingFields.every((field) =>
+      capture.updateInput.target_fields.includes(field),
+    ));
+    assert.match(capture.narrativeInstructions, /required clarification question verbatim before optional confirmations/i);
+  });
+});
+
+test("general questions remain conversational when a canonical case and clarification are present", async () => {
+  const caseData = (await runRuleEngine({
+    action: "validate",
+    caseData: await loadExampleCase(),
+  })).case;
+  caseData.pretreatment_burden = "unknown";
+  const caseState = {
+    schemaVersion: 2,
+    version: 3,
+    case: caseData,
+    confirmedUnknownFields: [],
+    conflictedFields: [],
+    pendingFields: ["pretreatment_burden"],
+    pendingQuestions: [{
+      field: "pretreatment_burden",
+      question: "What was the pretreatment bacterial burden?",
+      required_for_final_recommendation: true,
+    }],
+  };
+  const capture = {};
+  const openai = createRulesOnlyOpenAI({ capture, task: "guidance" });
+  const qdrant = {
+    search: async () => [{
+      id: "general-guidance",
+      score: 0.9,
+      payload: {
+        text: "Airborne precautions are used in healthcare settings.",
+        source_file: "guide.pdf",
+        title: "TB Guidance",
+        chunk_index: 1,
+        page_number: 2,
+      },
+    }],
+  };
+
+  await withChatServer({ openai, qdrant }, async (url) => {
+    const response = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "What does airborne precaution mean?",
+        conversationHistory: [
+          { role: "assistant", content: "Please clarify the pretreatment burden." },
+        ],
+        caseState,
+      }),
+    });
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(body, /Here is the answer using the current information/);
+    assert.match(body, /\[S1\]/);
+    assert.equal(capture.classificationInput.canonical_case_present, true);
+    assert.deepEqual(capture.classificationInput.pending_case_fields, ["pretreatment_burden"]);
+    assert.equal(capture.extractionCount, undefined);
+    assert.equal(capture.updateCount, undefined);
+    assert.equal(capture.narrativeInput, undefined);
+  });
+});
+
+test("combined fact update and general question use the freshly evaluated deterministic result", async () => {
+  const caseData = (await runRuleEngine({
+    action: "validate",
+    caseData: await loadExampleCase(),
+  })).case;
+  caseData.pretreatment_burden = "low";
+  caseData.community_risk = "low";
+  caseData.treatment_days = 2;
+  const caseState = {
+    schemaVersion: 2,
+    version: 8,
+    case: caseData,
+    confirmedUnknownFields: [],
+    conflictedFields: [],
+    pendingFields: [],
+    pendingQuestions: [],
+  };
+  const capture = {};
+  const openai = createRulesOnlyOpenAI({
+    capture,
+    task: "combined",
+    caseUpdates: { treatment_days: 5 },
+  });
+  const qdrant = {
+    search: async () => [{
+      id: "combined-guidance",
+      score: 0.9,
+      payload: {
+        text: "The applicable local policy uses treatment duration in reassessment.",
+        source_file: "guide.pdf",
+        title: "TB Guidance",
+        chunk_index: 2,
+        page_number: 3,
+      },
+    }],
+  };
+
+  await withChatServer({ openai, qdrant }, async (url) => {
+    const response = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "The patient has actually completed five days of treatment. How does that affect reassessment?",
+        conversationHistory: [
+          { role: "user", content: "Earlier patient history." },
+          { role: "assistant", content: "Previous response." },
+        ],
+        caseState,
+      }),
+    });
+    const body = await response.text();
+    const updatedState = JSON.parse(Buffer.from(
+      response.headers.get("x-tb-case-state"),
+      "base64url",
+    ).toString("utf8"));
+    const assessmentText = capture.guidanceAssessmentMessages
+      .map((message) => message.content || "")
+      .join("\n");
+
+    assert.equal(response.status, 200);
+    assert.match(body, /Here is the answer using the current information/);
+    assert.equal(updatedState.case.treatment_days, 5);
+    assert.equal(updatedState.version, 9);
+    assert.equal(capture.updateInput.current_user_message,
+      "The patient has actually completed five days of treatment. How does that affect reassessment?");
+    assert.match(assessmentText, /"treatment_days":5/);
+    assert.match(assessmentText, /expected_days_of_restrictions/);
+    assert.match(assessmentText, /How does that affect reassessment/);
+    assert.match(capture.guidanceAnswerMessages[0].content, /restriction level, conditions, and clearance status as authoritative/i);
+  });
+});
+
+test("a case-only treatment update patches a non-pending field and reruns the engine", async () => {
+  const caseData = (await runRuleEngine({
+    action: "validate",
+    caseData: await loadExampleCase(),
+  })).case;
+  caseData.pretreatment_burden = "unknown";
+  caseData.community_risk = "low";
+  caseData.treatment_days = 2;
+  const caseState = {
+    schemaVersion: 2,
+    version: 11,
+    case: caseData,
+    confirmedUnknownFields: [],
+    conflictedFields: [],
+    pendingFields: ["pretreatment_burden"],
+    pendingQuestions: [{
+      field: "pretreatment_burden",
+      question: "What was the pretreatment bacterial burden?",
+      required_for_final_recommendation: true,
+    }],
+  };
+  const capture = {};
+  const openai = createRulesOnlyOpenAI({
+    capture,
+    task: "case_update",
+    caseUpdates: { treatment_days: 5 },
+    autoResolvePending: false,
+  });
+
+  await withChatServer({
+    openai,
+    qdrant: { search: async () => { throw new Error("Case-only update should not use Qdrant."); } },
+  }, async (url) => {
+    const response = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "The patient has actually completed five days of treatment.",
+        conversationHistory: [
+          { role: "assistant", content: "Please clarify pretreatment bacterial burden." },
+        ],
+        caseState,
+      }),
+    });
+    const body = await response.text();
+    const updatedState = JSON.parse(Buffer.from(
+      response.headers.get("x-tb-case-state"),
+      "base64url",
+    ).toString("utf8"));
+
+    assert.equal(response.status, 200);
+    assert.match(body, /need you to clarify/i);
+    assert.equal(updatedState.case.treatment_days, 5);
+    assert.equal(updatedState.case.pretreatment_burden, "unknown");
+    assert.deepEqual(updatedState.pendingFields, ["pretreatment_burden"]);
+    assert.equal(updatedState.version, 12);
+    assert.equal(capture.updateInput.current_user_message,
+      "The patient has actually completed five days of treatment.");
+    assert.ok(capture.updateInput.target_fields.includes("treatment_days"));
+  });
 });

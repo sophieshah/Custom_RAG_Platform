@@ -1,9 +1,11 @@
 import React, { useState } from "react";
 import HomePage from "./HomePage";
 import Chat from "./Chat";
+import AdminPanel from "./AdminPanel";
 
 export default function App() {
   const [showHomePage, setShowHomePage] = useState(true);
+  const [showAdmin, setShowAdmin] = useState(false);
 
   const handleGetStarted = () => {
     setShowHomePage(false);
@@ -17,8 +19,13 @@ export default function App() {
 
   return (
     <div>
-      {showHomePage ? (
-        <HomePage onGetStarted={handleGetStarted} />
+      {showAdmin ? (
+        <AdminPanel onBack={() => setShowAdmin(false)} />
+      ) : showHomePage ? (
+        <HomePage
+          onGetStarted={handleGetStarted}
+          onAdmin={() => setShowAdmin(true)}
+        />
       ) : (
         <Chat onBackToHome={handleBackToHome} />
       )}

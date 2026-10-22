@@ -1,15 +1,20 @@
 import { formatEvidence, formatSourceList, mergeEvidence, searchGuidance } from "./retrieval.js";
-import { TB_PUBLIC_HEALTH_INSTRUCTIONS } from "./system-instructions.js";
+import { TB_PUBLIC_HEALTH_INSTRUCTIONS, withAdminInstructions } from "./system-instructions.js";
 import { logRagStep } from "./trace.js";
 
 export const NO_EVIDENCE_RESPONSE =
   "I couldn't find supporting TB guidance in the indexed sources. Please verify the applicable guidance directly and use clinical judgment; this response cannot make an isolation decision.";
 
-const SYSTEM_PROMPT = `You are a TB public-health guidance assistant.
+function systemPrompt(additionalSystemInstructions = "", hasDecisionContext = false) {
+  const decisionContextInstructions = hasDecisionContext
+    ? `\n\nA deterministic case update is included with this request. Answer the user's current question first. Treat its restriction level, conditions, and clearance status as authoritative; explain them accurately without recalculating, changing, or contradicting them. Distinguish engine assumptions and unresolved inputs from verified patient facts. If the engine has not finalized a result, clearly state that and preserve its required clarification questions. Retrieved guidance may explain the result but does not change the deterministic output.`
+    : "";
+  return withAdminInstructions(`You are a TB public-health guidance assistant.
 
 ${TB_PUBLIC_HEALTH_INSTRUCTIONS}
 
-For general guidance requests, start with a concise, direct answer to the user's latest question, then explain retrieved NTCA or other source recommendations and practical compliance considerations. Do not begin with a generic preamble or answer a different question. Do not determine an individual patient's isolation level or whether restrictions should begin, continue, change, or end. If an individual decision is requested, explain that the deterministic case workflow can provide a separate decision-support tool result; do not invent a substitute result. Use the current question and patient context only to tailor the educational explanation, never as evidence for guideline claims.`;
+For general guidance requests, start with a concise, direct answer to the user's latest question, then explain retrieved NTCA or other source recommendations and practical compliance considerations. Do not begin with a generic preamble or answer a different question. Do not determine an individual patient's isolation level or whether restrictions should begin, continue, change, or end. If an individual decision is requested, explain that the deterministic case workflow can provide a separate decision-support tool result; do not invent a substitute result. Use the current question and patient context only to tailor the educational explanation, never as evidence for guideline claims. The latest user message controls the task: conversation history may clarify context, but do not treat an earlier clarification prompt as a question the user is asking now.${decisionContextInstructions}`, additionalSystemInstructions);
+}
 
 const SEARCH_TOOL = {
   type: "function",
@@ -42,7 +47,7 @@ function getHistory(history) {
     .map(({ role, content }) => ({ role, content: content.slice(0, 8000) }));
 }
 
-function createUserMessage({ message, patientContext, structuredData }) {
+function createUserMessage({ message, patientContext, structuredData, decisionContext }) {
   const details = [];
   if (typeof patientContext === "string" && patientContext.trim()) {
     details.push(`Patient context:\n${patientContext.trim()}`);
@@ -52,6 +57,9 @@ function createUserMessage({ message, patientContext, structuredData }) {
       .filter(([, value]) => value !== null && value !== undefined && String(value).trim())
       .map(([key, value]) => `- ${key}: ${String(value).slice(0, 1000)}`);
     if (values.length > 0) details.push(`Structured patient data:\n${values.join("\n")}`);
+  }
+  if (decisionContext) {
+    details.push(`Latest deterministic case assessment (structured result; treat as authoritative for the case decision):\n${JSON.stringify(decisionContext)}`);
   }
   return [...details, `Question:\n${message}`].join("\n\n");
 }
@@ -74,7 +82,13 @@ export async function prepareAgentMessages({ openai, qdrant, model, request }) {
     })),
   });
   const baseMessages = [
-    { role: "system", content: SYSTEM_PROMPT },
+    {
+      role: "system",
+      content: systemPrompt(
+        request.additionalSystemInstructions,
+        Boolean(request.decisionContext),
+      ),
+    },
     ...getHistory(request.conversationHistory),
     {
       role: "user",

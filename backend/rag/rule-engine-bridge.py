@@ -1,10 +1,14 @@
-"""JSON stdin/stdout bridge for the deterministic rule engine."""
+"""JSON stdin/stdout adapter for the deterministic TB rules package."""
 
 from __future__ import annotations
 
 from dataclasses import asdict
 import json
+from pathlib import Path
 import sys
+
+package_path = Path(__file__).resolve().parents[2] / "tb_isolation_rules_package"
+sys.path.insert(0, str(package_path))
 
 from tb_isolation_rules import evaluate, parse_inputs
 

@@ -1,223 +1,327 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "TB community isolation inputs",
+  "title": "TB community isolation inputs v2",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "respiratory_tb": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "pediatric_noninfectious_confirmed": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "adult_type_disease": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "cavitation": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "extensive_radiographic_disease": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "resistance_suspected": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "resistance_addressed_by_regimen": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "on_treatment": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "regimen_appropriate": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "effectiveness_assessed": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "adherence_verified": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "tolerance_adequate": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "lab_supports_regimen": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "adverse_response_explained": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "vulnerable_contacts": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "congregate_return": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "targeted_restrictions_feasible": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
       ]
     },
     "expert_review_completed": {
       "type": [
         "string",
-        "null"
+        "null",
+        "boolean"
       ],
       "enum": [
         "yes",
         "no",
         "unknown",
-        null
+        null,
+        "",
+        true,
+        false
+      ]
+    },
+    "patient_immunosuppressed": {
+      "type": [
+        "string",
+        "null",
+        "boolean"
+      ],
+      "enum": [
+        "yes",
+        "no",
+        "unknown",
+        null,
+        "",
+        true,
+        false
+      ]
+    },
+    "symptoms_resolved": {
+      "type": [
+        "string",
+        "null",
+        "boolean"
+      ],
+      "enum": [
+        "yes",
+        "no",
+        "unknown",
+        null,
+        "",
+        true,
+        false
       ]
     },
     "pretreatment_burden": {
@@ -231,6 +335,7 @@
         "high",
         "unknown",
         null,
+        "",
         "medium"
       ]
     },
@@ -245,6 +350,7 @@
         "high",
         "unknown",
         null,
+        "",
         "medium"
       ]
     },
@@ -259,6 +365,7 @@
         "high",
         "unknown",
         null,
+        "",
         "medium"
       ]
     },
@@ -273,6 +380,7 @@
         "high",
         "unknown",
         null,
+        "",
         "medium"
       ]
     },
@@ -287,6 +395,7 @@
         "high",
         "unknown",
         null,
+        "",
         "medium"
       ]
     },
@@ -301,6 +410,7 @@
         "high",
         "unknown",
         null,
+        "",
         "medium"
       ]
     },
@@ -315,6 +425,7 @@
         "high",
         "unknown",
         null,
+        "",
         "medium"
       ]
     },
@@ -329,6 +440,7 @@
         "high",
         "unknown",
         null,
+        "",
         "medium"
       ]
     },
@@ -343,6 +455,22 @@
         "high",
         "unknown",
         null,
+        "",
+        "medium"
+      ]
+    },
+    "employment_harm": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "low",
+        "moderate",
+        "high",
+        "unknown",
+        null,
+        "",
         "medium"
       ]
     },
@@ -356,7 +484,8 @@
         "healthcare",
         "congregate_facility",
         "unknown",
-        null
+        null,
+        ""
       ]
     },
     "smear": {
@@ -366,13 +495,15 @@
       ],
       "enum": [
         "negative",
+        "positive",
         "scanty",
         "1+",
         "2+",
         "3+",
         "4+",
         "unknown",
-        null
+        null,
+        ""
       ]
     },
     "cough": {
@@ -385,7 +516,8 @@
         "mild",
         "frequent",
         "unknown",
-        null
+        null,
+        ""
       ]
     },
     "gxp_mtb": {
@@ -397,7 +529,8 @@
         "detected",
         "not_detected",
         "unknown",
-        null
+        null,
+        ""
       ]
     },
     "gxp_load": {
@@ -412,7 +545,8 @@
         "medium",
         "high",
         "unknown",
-        null
+        null,
+        ""
       ]
     },
     "rifampin": {
@@ -425,7 +559,8 @@
         "resistant",
         "indeterminate",
         "unknown",
-        null
+        null,
+        ""
       ]
     },
     "other_resistance": {
@@ -439,7 +574,8 @@
         "pza",
         "other",
         "unknown",
-        null
+        null,
+        ""
       ]
     },
     "clinical_response": {
@@ -453,7 +589,8 @@
         "worsening",
         "asymptomatic",
         "unknown",
-        null
+        null,
+        ""
       ]
     },
     "micro_response": {
@@ -466,7 +603,8 @@
         "stable",
         "worsening",
         "unknown",
-        null
+        null,
+        ""
       ]
     },
     "exposure_duration": {
@@ -479,7 +617,8 @@
         "recurrent",
         "prolonged",
         "unknown",
-        null
+        null,
+        ""
       ]
     },
     "exposure_proximity": {
@@ -492,7 +631,8 @@
         "shared_air",
         "close",
         "unknown",
-        null
+        null,
+        ""
       ]
     },
     "exposure_environment": {
@@ -505,7 +645,8 @@
         "well_ventilated",
         "poor_ventilation",
         "unknown",
-        null
+        null,
+        ""
       ]
     },
     "new_contacts": {
@@ -518,7 +659,41 @@
         "few",
         "many",
         "unknown",
-        null
+        null,
+        ""
+      ]
+    },
+    "gene_xpert": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "rif_sensitive",
+        "rif_resistant",
+        "unavailable",
+        "not_detected",
+        "unknown",
+        null,
+        "",
+        "detected RIF sensitive",
+        "detected RIF resistant",
+        "not available",
+        "rif-s",
+        "rif-r"
+      ]
+    },
+    "jurisdiction": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "unspecified",
+        "washington",
+        "other",
+        null,
+        ""
       ]
     },
     "age_years": {
@@ -549,9 +724,209 @@
       ],
       "minimum": 0
     },
+    "treatment_days": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "local_policy_minimum_days": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
     "individualized_reason": {
       "type": "string"
+    },
+    "local_policy_reason": {
+      "type": "string"
+    },
+    "bacterial_burden": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "low",
+        "moderate",
+        "high",
+        "unknown",
+        null,
+        "",
+        "medium"
+      ],
+      "description": "Alias of pretreatment_burden; do not send conflicting values."
+    },
+    "gxp_status": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "rif_sensitive",
+        "rif_resistant",
+        "unavailable",
+        "not_detected",
+        "unknown",
+        null,
+        "",
+        "detected RIF sensitive",
+        "detected RIF resistant",
+        "not available",
+        "rif-s",
+        "rif-r"
+      ],
+      "description": "Alias of gene_xpert; do not send conflicting values."
+    },
+    "drug_resistance_concern": {
+      "type": [
+        "string",
+        "null",
+        "boolean"
+      ],
+      "enum": [
+        "yes",
+        "no",
+        "unknown",
+        null,
+        "",
+        true,
+        false
+      ],
+      "description": "Alias of resistance_suspected; do not send conflicting values."
+    },
+    "days_of_treatment": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "description": "Alias of treatment_days; do not send conflicting values."
+    },
+    "treatment_effective": {
+      "type": [
+        "string",
+        "null",
+        "boolean"
+      ],
+      "enum": [
+        "yes",
+        "no",
+        "unknown",
+        null,
+        "",
+        true,
+        false
+      ],
+      "description": "Alias of effectiveness_assessed; do not send conflicting values."
+    },
+    "adherent": {
+      "type": [
+        "string",
+        "null",
+        "boolean"
+      ],
+      "enum": [
+        "yes",
+        "no",
+        "unknown",
+        null,
+        "",
+        true,
+        false
+      ],
+      "description": "Alias of adherence_verified; do not send conflicting values."
+    },
+    "tolerating": {
+      "type": [
+        "string",
+        "null",
+        "boolean"
+      ],
+      "enum": [
+        "yes",
+        "no",
+        "unknown",
+        null,
+        "",
+        true,
+        false
+      ],
+      "description": "Alias of tolerance_adequate; do not send conflicting values."
+    },
+    "cavity": {
+      "type": [
+        "string",
+        "null",
+        "boolean"
+      ],
+      "enum": [
+        "yes",
+        "no",
+        "unknown",
+        null,
+        "",
+        true,
+        false
+      ],
+      "description": "Alias of cavitation; do not send conflicting values."
+    },
+    "sputum_smear": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "negative",
+        "positive",
+        "scanty",
+        "1+",
+        "2+",
+        "3+",
+        "4+",
+        "unknown",
+        null,
+        ""
+      ],
+      "description": "Alias of smear; do not send conflicting values."
+    },
+    "immunosuppressed": {
+      "type": [
+        "string",
+        "null",
+        "boolean"
+      ],
+      "enum": [
+        "yes",
+        "no",
+        "unknown",
+        null,
+        "",
+        true,
+        false
+      ],
+      "description": "Alias of patient_immunosuppressed; do not send conflicting values."
+    },
+    "congregate_or_shelter": {
+      "type": [
+        "string",
+        "null",
+        "boolean"
+      ],
+      "enum": [
+        "yes",
+        "no",
+        "unknown",
+        null,
+        "",
+        true,
+        false
+      ],
+      "description": "Alias of congregate_return; do not send conflicting values."
     }
   },
-  "description": "Omitted fields remain unknown. Integer durations count completed days of verified uninterrupted effective treatment."
+  "description": "Minimal practical inputs: bacterial_burden, community_risk, gxp_status, treatment_days. Harm/adherence/tolerance/clinical-response defaults are disclosed. Missing grades yield questions, not extensive by default."
 }
