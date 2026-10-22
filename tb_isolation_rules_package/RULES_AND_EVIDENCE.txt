@@ -1,320 +1,246 @@
-TB ISOLATION RULE SET
-Version 0.1.0-draft | 6 October 2026
+TB COMMUNITY ISOLATION RULE ENGINE v0.2.0
+Updated 15 October 2026 to implement the user's revised policy and anchor table.
 
-PURPOSE AND STATUS
-This is runnable, deterministic Python code for a proposed community respiratory
-isolation and restriction (RIR) policy. It returns none, moderate, or extensive,
-plus a conditional duration and explicit release blockers. It is a pilot policy
-for clinical/program review, not a clinically validated algorithm or a verbatim
-implementation of NTCA. A deterministic answer is reproducible; it is not thereby
-clinically certain. Do not deploy the proposed thresholds without clinical review.
-
-The supplied documents were treated as evidence and examples. Instructions and
-LLM answers embedded in the case book were not treated as user instructions or
-authoritative rules. Original files were read but not changed.
-
-GETTING STARTED
-Requires Python 3.10 or later; no third-party packages.
+QUICK START
+Python 3.10+, standard library only.
   python tb_isolation_rules.py example_input.json
-  python tb_isolation_rules.py --schema
   python -m unittest -v test_tb_isolation_rules.py
 
-For integration:
-  from tb_isolation_rules import parse_inputs, evaluate
-  result = evaluate(parse_inputs(structured_patient_data))
+In an application:
+  from tb_isolation_rules import evaluate
+  result = evaluate({
+      "bacterial_burden": "low",
+      "community_risk": "low",
+      "gxp_status": "rif_sensitive",
+      "treatment_days": 5
+  })
 
-Send result to the LLM as structured evidence. Preserve the rule version, inputs,
-assessment time, source of clinician judgments, rule IDs, and any deviations in
-your application audit log. Do not ask the LLM to invent missing clinical values.
-This package does not prescribe TB drug regimens or medication changes.
+These four inputs produce:
+  restriction_level: "no restriction"
+  expected_days_of_restrictions: 5
+  expected_remaining_days: 0
+with every assumed input disclosed in assumptions and explanation.
 
-SCOPE
-Community decisions for persons with suspected/confirmed respiratory TB.
-The engine does not clear airborne precautions in healthcare facilities or
-authorize return to a congregate facility. A community patient anticipating
-return to such a setting can be evaluated with setting=community and the relevant
-exposure flags, but facility clearance remains separate. Other settings return
-an out-of-scope status and extensive provisional hold, not a facility recommendation.
+WHAT CHANGED
+1. Setting and respiratory_tb are optional context, not mandatory scope gates.
+   Missing setting no longer produces an out-of-scope error or extensive restriction.
+2. Missing optional data no longer become high burden/high risk or treatment failure.
+3. Resistance concern defaults to no; harm to moderate; adherence and tolerability
+   to yes; clinical response to improving. All are labeled assumptions, never
+   reported as verified clinical observations.
+4. RIF-sensitive + no concerns can establish assumed treatment effectiveness.
+5. Missing burden/community grades are inferred when possible or returned as
+   questions, never silently assigned high.
+6. Durations now implement the user's October 15 anchor table, including the
+   1d versus 5b distinction and the immunosuppressed 5c pattern.
+7. Removed the blanket vulnerable-contact 14-day rule and the blanket requirement
+   for expert signoff simply because isolation has already lasted over 14 days.
+8. Explicit no-improvement, rising smear, poor adherence, intolerance, or resistance
+   override favorable assumptions. Unchanged smear at >=14 days prompts review.
 
-INPUT CONTRACT
-input_schema.json lists every accepted field and category. Missing categorical
-fields and JSON null become unknown. "medium" normalizes to "moderate" for grades.
-Invalid spelling, unrecognized fields, Boolean substitutions, negative or fractional
-day counts raise errors; applications must surface validation failures, never
-interpret them as permission to release. Direct Python Inputs requires canonical
-values; use parse_inputs at JSON boundaries.
+PRIMARY OUTPUT CONTRACT
+restriction_level:
+  "no restriction", "moderate restriction", or "extensive restriction".
+  Only when a core grade cannot be inferred, or evidence conflicts, this is null
+  and decision_status="needs_input". Display the required question; never map null
+  to extensive. An invented clinical recommendation is not a missing-data fallback.
+expected_days_of_restrictions:
+  Selected total treatment-based target, e.g., 5, 7, 10, or 14. Zero for exemptions.
+  This is not days still remaining, and excludes an unknown pretreatment interval.
+expected_days_range:
+  Preserves a user-supplied 5-10 or 10-14 anchor range. Favorable/default response
+  chooses its lower end; explicit adverse response selects the upper planning end
+  and requires review. Unlisted combinations use the interpolation table below.
+expected_remaining_days:
+  target minus credited effective days, floored at zero, only if no release blockers.
+  Null when effectiveness, duration, response, or a necessary review remains unresolved.
+credited_effective_treatment_days:
+  Zero if treatment status/duration or effectiveness cannot be established.
+assumptions / explanation:
+  Every default and inferred treatment-credit assumption, suitable for LLM explanation.
+questions:
+  Short follow-up questions, with required_for_final_recommendation. Optional
+  confirmations do not prevent a recommendation under the requested assumptions.
+release_blockers:
+  Explicit facts or unresolved treatment/review conditions that prevent release.
+expert_consultation_recommended:
+  A referral flag; it is not itself an automatic increase in isolation duration.
 
-1. Pretreatment burden
-   A clinician can provide low/moderate/high/unknown. Optional original observations
-   provide a proposed deterministic fallback and can raise a supplied grade:
-   - High: smear >=2+, cavitation, extensive/multilobar disease, or GXP high load.
-   - Moderate: scanty/1+ smear, GXP medium load, or smear negative with frequent cough.
-   - Low: smear negative, no cavity, no extensive disease, and absent/mild cough.
-   - Otherwise unknown; use high provisionally and request assessment before release.
-   This grading is an implementation choice, not a validated diagnostic score.
-   A clinician-supplied grade can account for context such as case 5c. It cannot
-   automatically lower explicit higher-burden markers. Reconcile conflicts upstream.
-   Use PRETREATMENT smear, cough, cavitation, and GXP values here. Follow-up results
-   belong in clinical_response/micro_response. Do not reclassify baseline burden
-   using a falling follow-up smear. GXP detection alone does not imply high burden.
-   Trace/very-low/low GXP results alone do not establish low infectiousness.
+When a patient has adverse response or resistant TB, expected_days_of_restrictions
+is the baseline target, NOT a promise of release. Additional time is unresolved;
+expected_remaining_days stays null pending reassessment. All expected durations
+are conditional on the stated assumptions, particularly drug regimen effectiveness.
 
-2. Resistance
-   rifampin = susceptible/resistant/indeterminate/unknown from available molecular
-   or phenotypic testing. "Susceptible" can represent no RIF resistance detected
-   on GXP; it does not mean all drugs are susceptible.
-   gxp_mtb = detected/not_detected/unknown is a distinct field. An MTB-not-detected
-   result cannot establish RIF susceptibility. A RIF result may come from another
-   assay, so the code does not prohibit a separately supported RIF result.
-   other_resistance = none_detected/inh/pza/other/unknown summarizes the profile.
-   Retain the detailed drug-specific DST and assay provenance in the parent system.
-   resistance_suspected records clinical/epidemiologic concern; unknown is not no.
-   resistance_addressed_by_regimen is a clinician judgment for the ACTUAL regimen.
-   lab_supports_regimen means available DST supports an adequate active multidrug
-   regimen, not merely that one tested drug is susceptible.
+INPUTS FOR A SIMPLE FORM
+bacterial_burden: low / medium (or moderate) / high / unknown.
+  Alternatively provide sputum_smear, cough, cavity.
+gxp_status: rif_sensitive / rif_resistant / unavailable / not_detected / unknown.
+  Display strings "detected RIF sensitive" and "detected RIF resistant" also parse.
+drug_resistance_concern: yes / no / unknown, or Boolean. Default no with explanation.
+community_risk: low / medium / high / unknown.
+patient_harm: low / medium / high / unknown. Default medium if no domain grades.
+treatment_days: completed treatment days; zero is distinct from null/unknown.
+treatment_effective: yes / no / unknown, or Boolean. See inference below.
 
-3. Treatment (the dominant input)
-   Credit requires all of on_treatment, regimen_appropriate,
-   effectiveness_assessed, adherence_verified, tolerance_adequate = yes.
-   The clinician must assess doses, active drugs, absorption/interactions, and
-   adherence as relevant. This code cannot infer regimen adequacy from drug names.
-   - Any of these no/unknown -> zero credited days; duration remains conditional.
-   - Known resistance or yes/unknown suspicion requires resistance addressed=yes
-     and lab supports actual regimen=yes in this conservative draft.
-   - RIF unknown/indeterminate without laboratory regimen support may still count
-     if suspicion=no, clinician judges effectiveness=yes, and clinical response
-     is improving or asymptomatic. This matches the unknown-GXP case trajectories.
-   - Lab evidence against the regimen prevents credit.
-   - Unexplained worsening clinical or microbiologic response prevents credit.
-     A documented, reviewed alternative explanation can resolve that blocker.
-   - Stable positive follow-up smear alone does NOT block routine release.
-   - No routine requirement for smear/culture conversion or repeat testing solely
-     to demonstrate noninfectiousness.
+OPTIONAL MODIFIERS
+adherent, tolerating, clinical_response, micro_response,
+vulnerable_contacts, congregate_or_shelter, patient_immunosuppressed,
+symptoms_resolved, age_years, adult_type_disease, harm-domain grades,
+prospective exposure details, jurisdiction and explicit local-policy minimum.
+Full canonical and legacy fields are in input_schema.json. Prefer the small form;
+do not force users to complete the compatibility fields. minimal_input_schema.json
+contains the compact form, including the modifiers needed for special anchors.
 
-   uninterrupted_effective_days = completed days of continuous, verified effective
-   treatment, not calendar days since diagnosis, prescription, or isolation.
-   Unknown duration cannot support a finite release countdown. The parent system
-   must adjudicate interruptions and periods on inactive regimens. This engine
-   does not add scattered doses or automatically reset credit after every regimen
-   change. A switch between two regimens both judged effective need not erase
-   earlier effective days. Later DST may support an earlier regimen; the credited
-   interval must be explicitly reconciled by the clinician rather than guessed.
+Input spelling errors and conflicting aliases raise ValueError. Surface validation
+errors as correction requests; never catch errors and default to extensive.
+Explicit negative facts are never replaced with favorable defaults. Unknown/null
+optional fields receive the requested defaults and remain identifiable as assumed.
 
-4. Community risk
-   Grade prospective exposure if restrictions are lifted, separately from source
-   infectiousness. Direct low/moderate/high/unknown assessment is supported.
-   Optional proposed qualitative fallback:
-   - High: exposed vulnerable contacts, congregate return, or recurrent/prolonged
-     shared/close indoor air in poor ventilation.
-   - Low: brief, distant exposure outdoors or in good ventilation, few/no new
-     contacts, and explicitly no vulnerable contacts or congregate return.
-   - Moderate: complete exposure data not meeting either condition above.
-   - Unknown: incomplete fallback and no direct grade; use high pending assessment.
-   Explicit higher-risk details raise a lower direct grade.
-   Vulnerable contacts means prospective exposure to children under 5 or
-   immunosuppressed people, not simply older age or historic contact.
-   Do not reduce the community grade because treatment has begun; the engine
-   already applies treatment separately. Do not feed a post-treatment quantitative
-   risk estimate back in and count the treatment benefit twice.
+BURDEN INFERENCE FROM PARTIAL DATA
+Explicit burden grade is accepted without requiring all raw fields.
+If no grade is supplied:
+  - Smear 2+/3+/4+ or cavity present -> high.
+  - Smear scanty/1+/positive without grade, or frequent cough -> moderate.
+  - Smear negative without a known cavity or frequent cough -> provisional low.
+  - No cavity and no cough -> provisional low even if smear is unknown.
+  - Otherwise ask for a burden grade or additional findings.
+Missing markers remain unknown, not converted into negative test results. Partial
+inferences are identified and a confirmation question is returned. A directly
+supplied low/moderate grade conflicting with a high smear/cavity asks for resolution.
+This is a practical triage mapping, not a validated burden score. GXP positivity
+or extrapulmonary bacterial burden alone does not assign respiratory burden.
 
-   The supplied Wells-Riley reports motivate duration, proximity, environment,
-   contact numbers and future marginal risk. Their illustrative probabilities,
-   treatment multipliers, and suggested cut points are NOT used as validated
-   thresholds. No universal expected-secondary-infection cutoff was supplied.
-   Expected infections N*P is also not generally the probability of at least one
-   infection; under independence that probability is 1-(1-P)^N. The framework's
-   approximation should not silently become a clinical classification threshold.
+COMMUNITY RISK
+Accept the structured grade. If absent, use prospective exposure information:
+  - Vulnerable contacts, congregate/shelter return, or recurrent/prolonged exposure
+    in poor ventilation -> high.
+  - No new contacts, or few brief contacts outdoors/well ventilated -> low.
+  - Other known contact number/frequency/environment combinations -> moderate.
+  - Otherwise ask for the grade.
+Known prospective vulnerable/congregate exposure raises a lower direct grade.
+"Vulnerable" here is very young or immunocompromised exposed contacts, not the
+patient's own immunosuppression. Do not double-count treatment by feeding an already
+treatment-adjusted risk score into this independent community dimension.
 
-5. Patient harm
-   Overall clinician grade plus financial, housing, food, stigma, mental health,
-   and access-to-care domains. Use the highest known grade. A partially completed
-   domain assessment with no overall grade remains unknown unless already high.
-   Unknown harm is not labeled low and triggers assessment, but does not grant
-   automatic shortening. Moderate/high domains are returned for support planning.
-   The supplied patient survey has no validated numerical weights or cutoffs.
-   Proposed anchors: low = manageable disruption with supports; moderate =
-   substantial burden needing intervention; high = threatened basic needs,
-   housing/employment loss, severe stigma or mental-health impact. A clinician
-   assigns these grades. Acute patient needs require care independent of RIR.
+HARM
+Use the highest reported overall or domain grade across housing, finances, food,
+employment, mental health, stigma, and access to care. Missing domains do not block
+the available grade. If all grades are absent, assume moderate and disclose it.
 
-DECISION PRECEDENCE
-A. Validate inputs and setting.
-B. Confirmed absence of respiratory involvement -> no community RIR, unless
-   positive respiratory observations conflict with that assertion.
-   Confirmed noninfectious pediatric phenotype under age 10 -> no community RIR
-   only with the coded negative/absent respiratory markers and no adult-type disease.
-   A negative GXP result alone is never the pediatric exemption.
-C. Derive burden, community risk, harm and treatment credit.
-D. Calculate the proposed target below, then apply extension floors.
-E. Apply release blockers. Elapsed time alone cannot clear them.
-F. If no blockers and credited days >= target -> none.
-G. Otherwise set moderate/extensive, and schedule reassessment.
+TREATMENT AND RESISTANCE
+- A positive treatment-day count establishes treatment has started when the status
+  field is absent/unknown. If both start and duration are unknown, use zero credit.
+- If explicitly not on treatment but positive days are supplied, ask to resolve it.
+- RIF-sensitive and no resistance concern -> assume effectiveness when adherence,
+  tolerance and clinical improvement are favorable or their disclosed defaults apply.
+- Explicit effectiveness=yes can support unknown-GXP or resistant regimens; this
+  represents the clinician's assessment of the actual regimen, not the engine's
+  inference. Resistant cases also use the expert-review pathway.
+- Alternatively, adequate regimen + supportive laboratory evidence can establish
+  effectiveness, with resistance addressed if present.
+- Unknown/unavailable GXP with effectiveness unknown does not establish effectiveness.
+  Ask the question, give zero credit, and show a 10/14-day conditional target.
+  A patient already on treatment ordinarily receives moderate restrictions while
+  this is clarified; absent GXP is not automatically extensive.
+- Reported resistance overrides the default no-concern assumption. RIF-sensitive
+  does not exclude INH/PZA/other resistance or clinical/epidemiologic suspicion.
+- Explicit poor adherence, intolerance, ineffectiveness, or unexplained clinical
+  nonresponse/rising smear prevents treatment credit. A reviewed alternative
+  explanation can resolve a response concern, not poor adherence or intolerance.
+- Reported treatment days are assumed continuously effective under the stated
+  effectiveness assessment. If not all days were effective, supply
+  uninterrupted_effective_days separately. It cannot exceed treatment_days.
+- Do not infer an effective-treatment clock from days since diagnosis or isolation.
 
-PROPOSED TARGET TABLE (days of effective therapy)
-These are case-informed policy choices, NOT NTCA-mandated fixed durations.
-They assume treatment is effective; they do not promise a release date.
+USER ANCHOR POLICY (TOTAL DAYS)
+RIF-sensitive, no unresolved resistance concern:
+  Low burden, low community risk: 5 (2a, 2c).
+  Low burden, high community risk: 10 (2b, 2d).
+  Low burden, high risk, vulnerable contacts, LOW harm: 14 (5d).
+  Moderate burden, low risk: 7 (1a; also interpolation for higher harm).
+  Moderate burden, immunosuppressed patient, low risk: 10, conditional on symptom
+    resolution (5c). If explicitly not resolved but improving, reassess at 14.
+    Unknown resolution at day 10 prompts confirmation. Continued improvement at
+    day 14 does not automatically extend isolation beyond 14 solely for symptoms.
+  High burden, low risk, low harm: 10-14, default planning target 10 (6c).
+  High burden, low risk, moderate/high harm: 5-10, default target 5 (1c).
+  High burden, high risk, low harm: 14 (1b, 5a).
+  High burden, high risk, moderate/high harm: 10 (1d), 14 for congregate/shelter (5b).
+  High community risk with congregate return: 14, including lower-burden cases.
 
-Community   Burden       Low/unknown harm     Moderate/high harm
-Low         Low                 5                    5
-Low         Moderate            7                    5
-Low         High               10                    5
-Moderate    Low                 5                    5
-Moderate    Moderate/high       10                    7
-High        Low                10                   10
-High        Moderate/high      14                   10
+No available GXP RIF-sensitive result:
+  Low burden + low community risk: 10 (4a, 4c).
+  All other graded combinations: 14 (4b, 4d, 3a-3d, 6b; intermediate combinations
+    are an explicit conservative interpolation).
+  No-GXP floor remains even if other lab information supports effectiveness.
 
-Medium-community rows are proposed interpolation; the supplied permutation matrix
-does not fully specify them. The 7/10/14-day choices implement examples as a
-reviewable policy, not a claim that every patient in a tier needs those days.
+Unlisted medium-community combinations (explicit policy interpolation):
+  Low burden: 7.
+  Moderate burden: 10.
+  High burden: 14 with low harm; 10 with moderate/high harm.
+Higher harm uses the moderate-harm branch, never overrides treatment failure.
+Only low-burden/low-risk/RIF-S or high-burden/low-risk with moderate/high harm uses 5.
 
-Apply the MAXIMUM of the base target and applicable extension floors:
-- Unknown/indeterminate RIF with no lab support for actual regimen:
-  10 days if both burden and community risk low; otherwise 14.
-- Prospective vulnerable-contact exposure or congregate return: 14 days.
-  This deliberately conservative floor differs from teaching case 1d (10 days).
-- RIF resistance: 14 days plus lab-supported appropriate regimen, clinical and
-  microbiologic improvement, and expert review. This is a proposed conservative
-  policy consistent with the MDH quick-reference approach, NOT a universal NTCA
-  minimum for all forms of drug resistance.
-- Documented individualized_minimum_days can extend but cannot shorten those floors.
-  individualized_reason is required. Use for an adjudicated patient-specific concern,
-  not automatically because the patient has HIV, diabetes, or another diagnosis.
+EXEMPTIONS
+Child under 10, low burden (or explicit noninfectious pediatric assessment),
+adult_type_disease=no and no reported positive sputum/cavity -> no restriction, 0.
+This does not require cough, extensive-CXR, GXP, setting, and adherence fields all
+to be completed. Known sputum positivity/cavity prevents this exemption. If the
+adult-type phenotype is unknown, the exemption is not automatically applied.
+Explicit respiratory involvement excluded also gives no community RIR, unless
+respiratory findings conflict. A negative GXP alone is not an exclusion of TB.
 
-Additional release blockers:
-- Unknown respiratory involvement, unresolved overall burden or community risk.
-- Unknown effective duration, treatment uncertainty or adverse response above.
-- High community risk with moderate/high burden without clinical or micro support.
-- RIF-resistant disease without improving clinical AND micro response/expert review.
-- More than 14 actual isolation days, or target >14, without completed expert review.
-Routine known-susceptible cases do not require new sputum conversion.
-Unknown DST does not force isolation indefinitely if clinical judgment and response
-support effectiveness; persistent uncertainty about effectiveness does prevent release.
+LEVEL WHILE THE TARGET HAS NOT BEEN MET
+Before treatment or with explicitly ineffective/problematic treatment:
+  Extensive, except low burden + low community risk can use moderate.
+On treatment:
+  Ordinarily moderate; missing feasibility, tolerance, adherence, setting, or other
+  optional fields do not independently force extensive.
+  Extensive for unresolved resistant therapy, resistant effective therapy <5 days,
+  or explicit inability to implement targeted restrictions with high community risk.
+No restrictions once the selected target and necessary conditions are met.
+Moderate restrictions still exclude the relevant high-risk exposure; they do not
+automatically authorize daycare, congregate, or healthcare return.
 
-ISOLATION LEVEL WHILE A TARGET/BLOCKER REMAINS
-- No verified effective treatment: extensive if burden high/unknown, community
-  high/unknown, or resistance unresolved; otherwise moderate.
-- On verified treatment: generally moderate, allowing appropriately planned
-  lower-risk activities while restricting higher-risk exposures.
-- Extensive continues if high community risk and targeted restrictions cannot be
-  implemented or their feasibility is unknown; also for early RIF-resistant
-  treatment (<5 credited days), or high burden at zero credited days.
-- Extensive does not automatically mean hospital admission or confinement indoors.
-  Housing, essential care, outdoor access and other accommodations need a plan.
-  Moderate does not mean unrestricted daycare/clinical work or congregate return.
+BEYOND 14 DAYS AND WASHINGTON
+Routine drug-susceptible targets cap at 14. Declining smear positivity never extends
+the duration. No smear conversion requirement is encoded.
+Clinical nonresponse, rising smear, unchanged smear at/after 14 days, adherence
+problems, or suspected resistance prompt expert review; the engine does not invent
+a fixed extra number of days. Unchanged smear earlier in treatment alone is not
+an indefinite-isolation rule. An explicitly reviewed nonfailure explanation can
+resolve the trajectory concern.
+The prior conservative resistant-TB pathway retains a 14-day planning minimum
+plus explicit effectiveness and expert review; 20/21/24 calendar-day case outcomes
+are not universal regimen-specific minimums. This is a program-policy choice.
+Documented extenuating circumstances may use individualized_minimum_days with a
+reason. They can extend but not shorten the calculated target.
+Washington is handled by an explicit local-policy minimum and policy reference,
+or a local-review question. No universal Washington duration is invented. The
+official Washington manual remains the source for actual jurisdictional criteria:
+https://doh.wa.gov/you-and-your-family/illness-and-disease-z/tuberculosis-tb/public-health-professionals/tb-services-manual
 
-DURATION OUTPUT
-conditional_target_total_days: target on the effective-treatment clock.
-credited_effective_days: verified credit, zero when treatment is no/unknown.
-remaining_days_if_conditions_remain_met: max(0, target-credit) ONLY if no blocker.
-  null = cannot determine a release countdown. It does not mean 0 or indefinite
-  isolation without review. It calls for reassessment of named missing conditions.
-fixed_release_date: always null; the engine does not make calendar guarantees.
-reassess_within_days: operational proposal, 1 day for blockers/high harm; otherwise
-  within 7 days and no later than the relevant target/day-5 checkpoint.
-expert_review_required: flags resistant or prolonged decisions; review alone does
-  not prove a regimen effective or erase a failed clinical prerequisite.
-facility_clearance_granted: always false.
+EVIDENCE AND POLICY STATUS
+The October 15 user-supplied anchor table and defaults control this revision.
+Its fixed days and assumptions are implementation policy, not all universal NTCA
+requirements. Existing casebook/spreadsheets informed v1; v2 reconciles their
+ambiguities using the user's explicit instructions rather than copying old AI outputs.
+The general NTCA reference was checked online during this revision:
+https://www.idsociety.org/practice-guideline/ntca-tb-guideline/
+https://doi.org/10.1093/cid/ciae199
+NTCA supports effective treatment as central and individualized community decisions.
+This code has software tests, not prospective clinical validation. It does not
+prescribe a regimen or grant hospital airborne-precaution clearance.
 
-EXAMPLE
-example_input.json describes high burden, RIF susceptible, five verified treatment
-days, improving response, high community risk with vulnerable contacts and moderate
-patient harm. The result is moderate RIR, target 14 effective days, nine conditional
-days remaining. High-risk activities remain restricted. If on_treatment is changed
-to unknown, treatment credit becomes zero and remaining duration becomes null.
-
-SOURCE HIERARCHY AND RECONCILIATION
-G1. Supplied ciae199.pdf: NTCA 2024 guideline, DOI 10.1093/cid/ciae199.
-    PDF pages 8-10 / Tables 4-5 and Recommendations 3-5: effective therapy is
-    dominant; most patients have low infectious potential after >=5 days;
-    susceptibility may be anticipated; uncertainty and higher-risk exposures
-    warrant individualized assessment; reassess at least weekly and seek review
-    beyond 14 days. Published source checked online on 6 October 2026:
-    https://doi.org/10.1093/cid/ciae199
-    https://www.idsociety.org/practice-guideline/ntca-tb-guideline/
-
-C1. NTCA_TB_Isolation_Teaching_Cases_2_22_26_Testing.docx:
-    original Summary Table and case narratives, Cases 1a-6d (25 cases).
-    Durations are examples. Appended LLM responses are not clinical authorities.
-    Used for base target table, special contexts and time-varying treatment logic.
-
-M1. TB Isolation Assist Permutation Matrix.pdf, page 1:
-    used for cross-checking 5/7/10/14-day example patterns. Not a complete rule set.
-    The GXP-unavailable branch concerns uncertainty, not proof of resistance.
-
-S1. TB Isolation Assist Pilot Testing.docx.xlsx, Low Community Risk,
-    Mod Community Risk and other test sheets:
-    inspected observed tool outcomes and uncertainty. These are test observations.
-    For example Low Community Risk!M7 lists 10 for case 1c while the case book
-    gives 5. Tool-output wording such as "extensive or moderate" is not deterministic.
-
-S2. TB Isolation Assist Review Checklist.xlsx, Sheet1:
-    reviewer confirmations are useful acceptance history, not proof that all
-    source cells or clinical assertions are internally consistent.
-
-S3. TB isolation assist comparison of CDS website and AI tool_9.24.26_MS.xlsx,
-    Sheet1: case library, static website and AI columns were inspected separately.
-    Case 1a row 3 has 7 versus 5 days; 1d row 12 and subsequent follow-up differ;
-    6a row 66 has 20 days, while the case summary/matrix has 24. These outputs
-    were not pooled or voted on to manufacture a gold standard.
-
-F1. Estimating community risk of TB transmission-a tool for public health
-    practitioners v1.docx, Methods/Appendix A and Results:
-    source for exposure dimensions and forward-looking marginal transmission.
-    Its model is illustrative; absolute cutoffs and fitted decay are not validated
-    RIR rules. It also distinguishes calibrated settings from an earlier fragile
-    single-household-anchor model.
-
-F2. Infectiousness framework.docx, modeling assumptions and setting comparisons:
-    supports considering duration and shared air; its day-5 treatment assumption
-    differs substantially from F1. Neither numerical model overrides G1.
-
-H1. Patient Isolation Survey_MS.docx:
-    source of housing, food, employment, mental health, finances and social domains.
-    No scoring rubric is supplied; the harm aggregation is a proposed implementation.
-
-E1. Supplementary external cross-check, MDH/NTCA slide deck, page 12:
-    https://health.maryland.gov/phpa/OIDPCS/CTBCP/CTBCPDocuments/TB%20Isolation%20Principles%20QA%20on%20TB%20Isolation.pdf
-    Supports conservative 10-14 day unknown-GXP paths and a laboratory-supported
-    14-day RIF-resistant pathway. This is an external implementation reference,
-    not assumed to be the user's governing jurisdiction. This code is NOT an exact
-    implementation of MDH: notably its low-burden/high-risk rule, special-contact
-    floor, and unknown-DST response handling differ. Consult the source directly
-    before selecting MDH policy. No legal compliance claim is made.
-
-MATERIAL DISAGREEMENTS TO REVIEW
-1. Case 6a: summary/matrix 24 days; narrative and comparison 20. Neither is a
-   universal resistant-TB duration. Hospital discharge and effective-regimen
-   transitions also affect its timeline; facility release is outside this engine.
-2. Case 6d: summary community risk low, narrative moderate, tool comparison high.
-   BPaL/M starts on day 4 and restrictions end day 21, so 21 calendar days cannot
-   simply be called 21 effective-treatment days. The five-day initial phase is
-   also not consistently anchored. The engine does not hardcode 21 days.
-3. Case 5d: initially smear negative, then "declined to 1+". That is not a decline.
-   Verify source data before coding microbiologic improvement. Healthcare
-   occupational clearance is separate from community RIR.
-4. Case 1d: contacts under 5, high community risk, moderate harm, 10-day course.
-   This draft's special-contact floor yields 14. This is a deliberate review item.
-5. Case 5c: moderate burden/low risk/moderate harm but 10-day course. The generic
-   table yields 5. A documented response-specific extension can represent 10;
-   HIV status alone must not silently create a universal 10-day rule.
-6. Smear/cavitation descriptors in some spreadsheet rows disagree with the case
-   narrative. The phenotype mapper raises conflicting lower grades rather than
-   reproducing a potentially mislabeled spreadsheet result.
-7. Older framework models disagree on treatment effect and casual-setting risk.
-   Numeric estimates are not adopted as isolation thresholds.
-
-VALIDATION
-The unit tests cover treatment unknowns, day boundaries, DST uncertainty, resistance,
-exceptions, contradiction handling, exposure grading, harm, and 4,608 coarse input
-permutations. Passing tests verify software behavior, not clinical correctness.
-case_reconciliation.json compares all 25 case-summary durations to standardized
-community snapshots. It assumes response, adherence and feasibility as documented
-or explicitly standardized, and compares TARGETS rather than reconstructing every
-historical clinical decision. It intentionally reports mismatches. No retrospective
-or prospective clinical validation has been performed.
-
-Policy review should settle the discretionary table (especially medium risk and
-harm adjustments), special-contact floor, resistance evidence requirements,
-criteria for unknown-DST response, and who may enter the clinician judgment flags.
-Keep decision changes explicit and versioned; do not use an LLM to silently bypass
-these choices. Recalculate when treatment, DST, exposure, response, or harms change.
+MIGRATION AND TESTING
+Existing parse_inputs()/Inputs()/evaluate() entry points and legacy input names
+remain. isolation_level (none/moderate/extensive) and duration compatibility keys
+remain alongside the new requested labels. evaluate() now also accepts a dictionary.
+The old Policy parameter was removed; the rules are the explicit October 15 policy.
+Callers using evaluate(inputs, custom_policy) must migrate to the new policy module.
+Do not suppress needs_input by substituting extensive.
+anchor_validation.json records all supplied anchor rows (expanded for harm variants).
+case_reconciliation.json updates the 25 standardized target comparisons, without
+claiming that historical resistant-TB calendar courses equal effective days.
+The suite exercises missing inputs, defaults, adverse overrides, day boundaries,
+child exemptions, local policy, all anchors, and 576 graded combinations.

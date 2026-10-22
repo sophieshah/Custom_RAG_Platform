@@ -1,6 +1,7 @@
 {
-  "scope": "25 standardized community target comparisons; not clinical validation or full timeline replay",
-  "numeric_matches": 21,
+  "ruleset_version": "0.2.0-user-policy",
+  "scope": "Standardized target comparison only, not historical decision validation; resistance calendar timelines are not treatment minima.",
+  "numeric_matches": 23,
   "cases": [
     {
       "case": "1a",
@@ -56,8 +57,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D01_CASE_INFORMED_LOW_COMMUNITY",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_RIF_S_LOW_COMMUNITY",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -114,8 +115,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D03_CASE_INFORMED_HIGH_COMMUNITY",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_RIF_S_HIGH_COMMUNITY",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -172,16 +173,17 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D01_CASE_INFORMED_LOW_COMMUNITY",
-        "L01_TARGET_AND_RELEASE_CONDITIONS_MET"
+        "D_RIF_S_LOW_COMMUNITY",
+        "D_RANGE_LOWER_BOUND_WITH_FAVORABLE_RESPONSE",
+        "L_TARGET_MET"
       ]
     },
     {
       "case": "1d",
       "case_summary_days": 10,
-      "draft_target_effective_days": 14,
-      "numerical_match_only": false,
-      "note": "Draft vulnerable-contact floor is 14, whereas case ends at 10; requires policy adjudication.",
+      "draft_target_effective_days": 10,
+      "numerical_match_only": true,
+      "note": "October 15 policy: high burden/high community/moderate harm gives 10 despite young contacts; shelter modifier is separate.",
       "standardized_inputs": {
         "setting": "community",
         "respiratory_tb": "yes",
@@ -230,9 +232,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D03_CASE_INFORMED_HIGH_COMMUNITY",
-        "D05_SPECIAL_EXPOSURE_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_RIF_S_HIGH_COMMUNITY",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -289,8 +290,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D01_CASE_INFORMED_LOW_COMMUNITY",
-        "L01_TARGET_AND_RELEASE_CONDITIONS_MET"
+        "D_RIF_S_LOW_COMMUNITY",
+        "L_TARGET_MET"
       ]
     },
     {
@@ -347,8 +348,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D03_CASE_INFORMED_HIGH_COMMUNITY",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_RIF_S_HIGH_COMMUNITY",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -405,8 +406,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D01_CASE_INFORMED_LOW_COMMUNITY",
-        "L01_TARGET_AND_RELEASE_CONDITIONS_MET"
+        "D_RIF_S_LOW_COMMUNITY",
+        "L_TARGET_MET"
       ]
     },
     {
@@ -463,8 +464,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D03_CASE_INFORMED_HIGH_COMMUNITY",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_RIF_S_HIGH_COMMUNITY",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -521,7 +522,7 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "S02_CONFIRMED_NONINFECTIOUS_PEDIATRIC_PHENOTYPE"
+        "S_PEDIATRIC_NON_ADULT_TYPE"
       ]
     },
     {
@@ -578,9 +579,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D01_CASE_INFORMED_LOW_COMMUNITY",
-        "D04_UNKNOWN_DST_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_UNKNOWN_GXP_10_OR_14",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -637,9 +637,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D03_CASE_INFORMED_HIGH_COMMUNITY",
-        "D04_UNKNOWN_DST_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_UNKNOWN_GXP_10_OR_14",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -696,9 +695,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D01_CASE_INFORMED_LOW_COMMUNITY",
-        "D04_UNKNOWN_DST_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_UNKNOWN_GXP_10_OR_14",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -755,10 +753,9 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D03_CASE_INFORMED_HIGH_COMMUNITY",
-        "D04_UNKNOWN_DST_EXTENSION",
-        "D05_SPECIAL_EXPOSURE_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_UNKNOWN_GXP_10_OR_14",
+        "D_SPECIAL_EXPOSURE_14",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -815,9 +812,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D01_CASE_INFORMED_LOW_COMMUNITY",
-        "D04_UNKNOWN_DST_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_UNKNOWN_GXP_10_OR_14",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -874,9 +870,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D03_CASE_INFORMED_HIGH_COMMUNITY",
-        "D04_UNKNOWN_DST_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_UNKNOWN_GXP_10_OR_14",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -933,9 +928,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D01_CASE_INFORMED_LOW_COMMUNITY",
-        "D04_UNKNOWN_DST_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_UNKNOWN_GXP_10_OR_14",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -992,10 +986,9 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D03_CASE_INFORMED_HIGH_COMMUNITY",
-        "D04_UNKNOWN_DST_EXTENSION",
-        "D05_SPECIAL_EXPOSURE_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_UNKNOWN_GXP_10_OR_14",
+        "D_SPECIAL_EXPOSURE_14",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -1052,9 +1045,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D03_CASE_INFORMED_HIGH_COMMUNITY",
-        "D05_SPECIAL_EXPOSURE_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_RIF_S_HIGH_COMMUNITY",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -1111,17 +1103,17 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D03_CASE_INFORMED_HIGH_COMMUNITY",
-        "D05_SPECIAL_EXPOSURE_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_RIF_S_HIGH_COMMUNITY",
+        "D_SPECIAL_EXPOSURE_14",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
       "case": "5c",
       "case_summary_days": 10,
-      "draft_target_effective_days": 5,
-      "numerical_match_only": false,
-      "note": "Generic target is 5. Case-specific clinical response extension to 10 requires an explicit reason.",
+      "draft_target_effective_days": 10,
+      "numerical_match_only": true,
+      "note": "October 15 policy: explicit patient immunosuppression modifier and confirmed symptom resolution yield 10.",
       "standardized_inputs": {
         "setting": "community",
         "respiratory_tb": "yes",
@@ -1167,11 +1159,13 @@
         "access_to_care_harm": "unknown",
         "individualized_minimum_days": null,
         "individualized_reason": "",
-        "expert_review_completed": "unknown"
+        "expert_review_completed": "unknown",
+        "patient_immunosuppressed": "yes",
+        "symptoms_resolved": "yes"
       },
       "rule_ids": [
-        "D01_CASE_INFORMED_LOW_COMMUNITY",
-        "L01_TARGET_AND_RELEASE_CONDITIONS_MET"
+        "D_RIF_S_LOW_COMMUNITY",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -1228,9 +1222,9 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D03_CASE_INFORMED_HIGH_COMMUNITY",
-        "D05_SPECIAL_EXPOSURE_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_RIF_S_HIGH_COMMUNITY",
+        "D_SPECIAL_EXPOSURE_14",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -1287,10 +1281,9 @@
         "expert_review_completed": "yes"
       },
       "rule_ids": [
-        "D03_CASE_INFORMED_HIGH_COMMUNITY",
-        "D05_SPECIAL_EXPOSURE_EXTENSION",
-        "D06_RIF_RESISTANT_POLICY_MINIMUM",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_UNKNOWN_GXP_10_OR_14",
+        "D_RESISTANCE_EXPERT_PATHWAY",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -1347,9 +1340,8 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D01_CASE_INFORMED_LOW_COMMUNITY",
-        "D04_UNKNOWN_DST_EXTENSION",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_UNKNOWN_GXP_10_OR_14",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -1406,8 +1398,9 @@
         "expert_review_completed": "unknown"
       },
       "rule_ids": [
-        "D01_CASE_INFORMED_LOW_COMMUNITY",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_RIF_S_LOW_COMMUNITY",
+        "D_RANGE_LOWER_BOUND_WITH_FAVORABLE_RESPONSE",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     },
     {
@@ -1464,9 +1457,9 @@
         "expert_review_completed": "yes"
       },
       "rule_ids": [
-        "D02_PROPOSED_MEDIUM_COMMUNITY",
-        "D06_RIF_RESISTANT_POLICY_MINIMUM",
-        "L06_TARGETED_RESTRICTIONS_DURING_TREATMENT"
+        "D_UNKNOWN_GXP_10_OR_14",
+        "D_RESISTANCE_EXPERT_PATHWAY",
+        "L_ON_TREATMENT_TARGETED_RESTRICTIONS"
       ]
     }
   ]

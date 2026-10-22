@@ -1,202 +1,181 @@
-"""Behavior and safety-boundary tests; not evidence of clinical validation.
-Run: python -m unittest -v test_tb_isolation_rules.py
-"""
 import itertools
 import unittest
-from dataclasses import replace
-from tb_isolation_rules import Inputs, Policy, evaluate, parse_inputs
-
+from tb_isolation_rules import evaluate, Inputs
 
 def patient(**kw):
-    d = dict(setting="community", respiratory_tb="yes", pretreatment_burden="low",
-             rifampin="susceptible", resistance_suspected="no", on_treatment="yes",
-             regimen_appropriate="yes", effectiveness_assessed="yes", adherence_verified="yes",
-             tolerance_adequate="yes", uninterrupted_effective_days=5,
-             clinical_response="improving", community_risk="low", patient_harm="low",
-             vulnerable_contacts="no", congregate_return="no", targeted_restrictions_feasible="yes")
+    d=dict(bacterial_burden='low',community_risk='low',gxp_status='rif_sensitive',treatment_days=5)
     d.update(kw)
-    return Inputs(**d)
+    return d
 
+ANCHORS=[
+ ('low','rif_sensitive','low','low',{},5,(5,5)),
+ ('low','rif_sensitive','low','moderate',{},5,(5,5)),
+ ('low','rif_sensitive','high','low',{},10,(10,10)),
+ ('low','rif_sensitive','high','moderate',{},10,(10,10)),
+ ('low','rif_sensitive','high','low',{'vulnerable_contacts':'yes'},14,(14,14)),
+ ('moderate','rif_sensitive','low','low',{},7,(7,7)),
+ ('moderate','rif_sensitive','low','moderate',{'patient_immunosuppressed':'yes','symptoms_resolved':'yes'},10,(10,10)),
+ ('high','rif_sensitive','low','low',{},10,(10,14)),
+ ('high','rif_sensitive','low','moderate',{},5,(5,10)),
+ ('high','rif_sensitive','high','low',{},14,(14,14)),
+ ('high','rif_sensitive','high','moderate',{'vulnerable_contacts':'yes'},10,(10,10)),
+ ('high','rif_sensitive','high','moderate',{'congregate_return':'yes'},14,(14,14)),
+ ('low','unavailable','low','low',{},10,(10,10)),
+ ('low','unavailable','low','moderate',{},10,(10,10)),
+ ('low','unavailable','high','low',{},14,(14,14)),
+ ('low','unavailable','high','moderate',{},14,(14,14)),
+ ('high','unavailable','low','low',{},14,(14,14)),
+ ('high','unavailable','high','moderate',{},14,(14,14)),
+ ('low','unavailable','high','high',{'age_years':8,'adult_type_disease':'no','treatment_days':0},0,(0,0)),
+]
 
 class RulesTest(unittest.TestCase):
-    def test_five_day_boundary(self):
-        for day, level in [(0,"moderate"),(1,"moderate"),(4,"moderate"),(5,"none"),(6,"none")]:
-            with self.subTest(day=day):
-                self.assertEqual(evaluate(patient(uninterrupted_effective_days=day))["isolation_level"], level)
+ def test_anchors(self):
+  for b,g,c,h,extra,total,span in ANCHORS:
+   with self.subTest(b=b,g=g,c=c,h=h,extra=extra):
+    r=evaluate(patient(bacterial_burden=b,gxp_status=g,community_risk=c,patient_harm=h,**extra))
+    self.assertEqual(r['expected_days_of_restrictions'],total)
+    self.assertEqual(tuple(r['expected_days_range'].values()),span)
 
-    def test_unknown_treatment_never_receives_credit(self):
-        for field in ("on_treatment", "effectiveness_assessed", "regimen_appropriate", "adherence_verified", "tolerance_adequate"):
-            for value in ("no", "unknown"):
-                with self.subTest(field=field,value=value):
-                    r=evaluate(patient(**{field:value,"uninterrupted_effective_days":100}))
-                    self.assertNotEqual(r["isolation_level"],"none")
-                    self.assertEqual(r["duration"]["credited_effective_days"],0)
-                    self.assertIsNone(r["duration"]["remaining_days_if_conditions_remain_met"])
+ def test_minimal_input_and_defaults(self):
+  r=evaluate(patient())
+  self.assertEqual(r['restriction_level'],'no restriction')
+  defaults={a['field']:a['value'] for a in r['assumptions']}
+  for k,v in {'patient_harm':'moderate','resistance_suspected':'no','adherence_verified':'yes','tolerance_adequate':'yes','clinical_response':'improving','effectiveness_assessed':'yes'}.items(): self.assertEqual(defaults[k],v)
 
-    def test_unknown_dst_can_be_judged_effective(self):
-        for burden, risk, target in [("low","low",10),("high","low",14),("low","high",14)]:
-            with self.subTest(burden=burden,risk=risk):
-                x=patient(rifampin="unknown",pretreatment_burden=burden,community_risk=risk,
-                          uninterrupted_effective_days=target)
-                r=evaluate(x)
-                self.assertEqual(r["duration"]["conditional_target_total_days"],target)
-                self.assertEqual(r["isolation_level"],"none")
+ def test_setting_never_forces_extensive(self):
+  for s in (None,'unknown','community','healthcare','congregate_facility'):
+   r=evaluate(patient(setting=s))
+   self.assertEqual(r['restriction_level'],'no restriction')
+   self.assertFalse(r['facility_clearance_granted'])
 
-    def test_unknown_dst_without_response_is_hold(self):
-        r=evaluate(patient(rifampin="unknown",clinical_response="unknown",uninterrupted_effective_days=30))
-        self.assertNotEqual(r["isolation_level"],"none")
+ def test_missing_core_asks(self):
+  for d in ({},patient(bacterial_burden=None),patient(community_risk=None)):
+   r=evaluate(d)
+   self.assertEqual(r['decision_status'],'needs_input')
+   self.assertIsNone(r['restriction_level'])
+   self.assertIsNone(r['expected_days_of_restrictions'])
 
-    def test_indeterminate_rif_behaves_as_unknown(self):
-        a=evaluate(patient(rifampin="unknown"))
-        b=evaluate(patient(rifampin="indeterminate"))
-        self.assertEqual(a,b)
+ def test_partial_burden(self):
+  for raw,grade in [({'smear':'negative'},'low'),({'smear':'1+'},'moderate'),({'smear':'3+'},'high'),({'cavitation':'yes'},'high'),({'cough':'frequent'},'moderate'),({'cavitation':'no','cough':'none'},'low')]:
+   self.assertEqual(evaluate(patient(bacterial_burden='unknown',**raw))['normalized_assessment']['pretreatment_burden'],grade)
 
-    def test_lab_support_can_resolve_missing_rif(self):
-        r=evaluate(patient(rifampin="unknown",lab_supports_regimen="yes"))
-        self.assertEqual(r["isolation_level"],"none")
+ def test_conflicts_ask(self):
+  for extra in ({'smear':'3+'},{'rifampin':'resistant'},{'on_treatment':'no'}):
+   self.assertEqual(evaluate(patient(**extra))['decision_status'],'needs_input')
 
-    def test_rif_susceptibility_not_full_dst(self):
-        r=evaluate(patient(rifampin="susceptible",other_resistance="unknown"))
-        self.assertEqual(r["isolation_level"],"none")
-        self.assertNotEqual(evaluate(patient(resistance_suspected="yes"))["isolation_level"],"none")
+ def test_community_inference(self):
+  for extra,c in [({'new_contacts':'none'},'low'),({'vulnerable_contacts':'yes'},'high'),({'new_contacts':'many','exposure_duration':'recurrent','exposure_environment':'well_ventilated'},'moderate')]:
+   self.assertEqual(evaluate(patient(community_risk='unknown',**extra))['normalized_assessment']['community_risk'],c)
 
-    def test_unknown_resistance_suspicion_not_no(self):
-        r=evaluate(patient(resistance_suspected="unknown",uninterrupted_effective_days=30))
-        self.assertIn("RESISTANCE_NOT_ADDRESSED",r["release_blockers"])
+ def test_domain_harm(self):
+  self.assertEqual(evaluate(patient(housing_harm='high'))['normalized_assessment']['patient_harm'],'high')
+  self.assertEqual(evaluate(patient(employment_harm='low'))['normalized_assessment']['patient_harm'],'low')
 
-    def test_rif_resistant_day14_and_evidence(self):
-        x=patient(rifampin="resistant",resistance_addressed_by_regimen="yes",lab_supports_regimen="yes",
-                  micro_response="improving",expert_review_completed="yes",uninterrupted_effective_days=14)
-        self.assertEqual(evaluate(x)["isolation_level"],"none")
-        self.assertEqual(evaluate(replace(x,uninterrupted_effective_days=13))["isolation_level"],"moderate")
-        for kw in ({"lab_supports_regimen":"unknown"},{"micro_response":"unknown"},
-                   {"clinical_response":"stable"},{"expert_review_completed":"unknown"}):
-            with self.subTest(kw=kw):
-                self.assertNotEqual(evaluate(replace(x,**kw))["isolation_level"],"none")
+ def test_adverse_overrides_assumptions(self):
+  for extra in ({'adherent':False},{'tolerating':False},{'clinical_response':'no improvement'},{'treatment_effective':False},{'regimen_appropriate':'no'},{'lab_supports_regimen':'no'},{'micro_response':'rising'}):
+   r=evaluate(patient(treatment_days=20,**extra))
+   self.assertNotEqual(r['restriction_level'],'no restriction')
+   self.assertEqual(r['credited_effective_treatment_days'],0)
+   self.assertTrue(r['expert_consultation_recommended'])
 
-    def test_inh_pza_do_not_automatically_mean_ineffective(self):
-        for drug in ("inh","pza"):
-            r=evaluate(patient(other_resistance=drug,resistance_addressed_by_regimen="yes",lab_supports_regimen="yes"))
-            self.assertEqual(r["isolation_level"],"none")
+ def test_unknown_treatment(self):
+  for extra in ({'treatment_days':None},{'treatment_days':None,'on_treatment':'yes'}):
+   r=evaluate(patient(**extra))
+   self.assertEqual(r['credited_effective_treatment_days'],0)
+   self.assertIsNone(r['expected_remaining_days'])
+   self.assertEqual(r['expected_days_of_restrictions'],5)
 
-    def test_response_worsening_needs_review(self):
-        for field in ("clinical_response","micro_response"):
-            x=patient(**{field:"worsening"})
-            self.assertNotEqual(evaluate(x)["isolation_level"],"none")
-            self.assertEqual(evaluate(replace(x,adverse_response_explained="yes"))["isolation_level"],"none")
+ def test_pretreatment_levels(self):
+  self.assertEqual(evaluate(patient(treatment_days=0))['restriction_level'],'moderate restriction')
+  self.assertEqual(evaluate(patient(treatment_days=0,bacterial_burden='high'))['restriction_level'],'extensive restriction')
 
-    def test_stable_positive_followup_smear_not_release_barrier(self):
-        self.assertEqual(evaluate(patient(micro_response="stable"))["isolation_level"],"none")
+ def test_unknown_gxp_not_automatic_extensive(self):
+  r=evaluate(patient(gxp_status='unavailable'))
+  self.assertEqual(r['restriction_level'],'moderate restriction')
+  self.assertEqual(r['credited_effective_treatment_days'],0)
+  self.assertEqual(r['expected_days_of_restrictions'],10)
+  self.assertIsNone(r['expected_remaining_days'])
 
-    def test_unknown_days_is_not_five(self):
-        r=evaluate(patient(uninterrupted_effective_days=None))
-        self.assertIn("EFFECTIVE_DURATION_UNKNOWN",r["release_blockers"])
-        self.assertIsNone(r["duration"]["remaining_days_if_conditions_remain_met"])
+ def test_unknown_gxp_explicit_effectiveness(self):
+  self.assertEqual(evaluate(patient(gxp_status='unavailable',treatment_effective=True,treatment_days=10))['restriction_level'],'no restriction')
+  r=evaluate(patient(gxp_status='unavailable',lab_supports_regimen='yes',regimen_appropriate='yes'))
+  self.assertGreaterEqual(r['expected_days_of_restrictions'],10)
 
-    def test_all_missing_is_conservative(self):
-        r=evaluate(parse_inputs({}))
-        self.assertEqual(r["isolation_level"],"extensive")
-        self.assertIsNone(r["duration"]["remaining_days_if_conditions_remain_met"])
+ def test_resistance(self):
+  r=evaluate(patient(drug_resistance_concern=True,treatment_days=20))
+  self.assertEqual(r['restriction_level'],'extensive restriction')
+  self.assertEqual(r['credited_effective_treatment_days'],0)
+  r=evaluate(patient(gxp_status='rif_resistant',treatment_effective=True,expert_review_completed='yes',treatment_days=14))
+  self.assertEqual(r['restriction_level'],'no restriction')
+  self.assertFalse(any(a['field']=='resistance_suspected' for a in r['assumptions']))
 
-    def test_harm_can_shorten_discretionary_extension(self):
-        x=patient(pretreatment_burden="high",patient_harm="high",uninterrupted_effective_days=5)
-        self.assertEqual(evaluate(x)["isolation_level"],"none")
-        self.assertNotEqual(evaluate(replace(x,on_treatment="unknown"))["isolation_level"],"none")
+ def test_smear_trajectories(self):
+  for day in (14,15,30):
+   r=evaluate(patient(bacterial_burden='high',community_risk='high',patient_harm='low',treatment_days=day,micro_response='declining'))
+   self.assertEqual(r['restriction_level'],'no restriction')
+   self.assertEqual(r['expected_days_of_restrictions'],14)
+  r=evaluate(patient(treatment_days=14,micro_response='unchanged'))
+  self.assertEqual(r['restriction_level'],'moderate restriction')
+  self.assertIn('UNCHANGED_SMEAR_AT_14_DAYS',r['release_blockers'])
+  self.assertIsNone(r['expected_remaining_days'])
 
-    def test_harm_never_shortens_special_floor(self):
-        for h in ("low","moderate","high","unknown"):
-            r=evaluate(patient(patient_harm=h,vulnerable_contacts="yes"))
-            self.assertEqual(r["duration"]["conditional_target_total_days"],14)
+ def test_prolonged_isolation_not_blanket_gate(self):
+  r=evaluate(patient(treatment_days=15,days_since_isolation_started=20))
+  self.assertEqual(r['restriction_level'],'no restriction')
+  self.assertTrue(r['expert_consultation_recommended'])
 
-    def test_partial_harm_is_unknown(self):
-        r=evaluate(patient(patient_harm="unknown",financial_harm="low"))
-        self.assertEqual(r["normalized_assessment"]["patient_harm"],"unknown")
-        r=evaluate(patient(patient_harm="low",housing_harm="high"))
-        self.assertEqual(r["normalized_assessment"]["patient_harm"],"high")
+ def test_case5c(self):
+  base=patient(bacterial_burden='moderate',patient_immunosuppressed='yes',treatment_days=10)
+  self.assertEqual(evaluate(base)['restriction_level'],'moderate restriction')
+  self.assertEqual(evaluate(dict(base,symptoms_resolved='yes'))['restriction_level'],'no restriction')
+  self.assertEqual(evaluate(dict(base,symptoms_resolved='no'))['expected_days_of_restrictions'],14)
+  self.assertEqual(evaluate(dict(base,treatment_days=14,symptoms_resolved='no'))['restriction_level'],'no restriction')
 
-    def test_burden_conflict_cannot_lower_observation(self):
-        r=evaluate(patient(smear="3+"))
-        self.assertEqual(r["normalized_assessment"]["pretreatment_burden"],"high")
+ def test_child_exception(self):
+  base=patient(age_years=8,adult_type_disease='no',treatment_days=None,gxp_status='unavailable',community_risk='unknown')
+  self.assertEqual(evaluate(base)['restriction_level'],'no restriction')
+  self.assertEqual(evaluate(base)['expected_days_of_restrictions'],0)
+  for extra in ({'age_years':10},{'adult_type_disease':'unknown'},{'smear':'positive'},{'cavitation':'yes'}): self.assertNotEqual(evaluate(dict(base,**extra))['restriction_level'],'no restriction')
 
-    def test_derived_burden(self):
-        for kw,grade in [({"smear":"negative","cavitation":"no","extensive_radiographic_disease":"no","cough":"mild"},"low"),
-                         ({"smear":"1+"},"moderate"),({"cavitation":"yes"},"high"),({"gxp_load":"high"},"high")]:
-            r=evaluate(patient(pretreatment_burden="unknown",**kw))
-            self.assertEqual(r["normalized_assessment"]["pretreatment_burden"],grade)
+ def test_washington(self):
+  r=evaluate(patient(jurisdiction='WA'))
+  self.assertIn('WASHINGTON_POLICY_REVIEW',r['release_blockers'])
+  self.assertEqual(r['restriction_level'],'moderate restriction')
+  r=evaluate(patient(jurisdiction='WA',local_policy_minimum_days=21,local_policy_reason='Clinician-supplied example protocol'))
+  self.assertEqual(r['expected_days_of_restrictions'],21)
 
-    def test_exposure_can_raise_direct_community_grade(self):
-        r=evaluate(patient(exposure_duration="prolonged",exposure_proximity="close",exposure_environment="poor_ventilation"))
-        self.assertEqual(r["normalized_assessment"]["community_risk"],"high")
+ def test_documented_extension(self):
+  self.assertEqual(evaluate(patient(individualized_minimum_days=18,individualized_reason='Extenuating circumstance'))['expected_days_of_restrictions'],18)
+  with self.assertRaises(ValueError): evaluate(patient(individualized_minimum_days=18))
 
-    def test_unknown_community_blocks_release(self):
-        self.assertNotEqual(evaluate(patient(community_risk="unknown",uninterrupted_effective_days=30))["isolation_level"],"none")
+ def test_boundaries(self):
+  for target,extra in [(5,{}),(7,{'bacterial_burden':'moderate'}),(10,{'community_risk':'high'}),(14,{'community_risk':'high','bacterial_burden':'high','patient_harm':'low'})]:
+   for day in (target-1,target,target+1): self.assertEqual(evaluate(patient(treatment_days=day,**extra))['restriction_level']=='no restriction',day>=target)
 
-    def test_unknown_burden_blocks_release(self):
-        self.assertNotEqual(evaluate(patient(pretreatment_burden="unknown",uninterrupted_effective_days=30))["isolation_level"],"none")
+ def test_legacy(self):
+  self.assertEqual(evaluate(Inputs(pretreatment_burden='low',community_risk='low',rifampin='susceptible',uninterrupted_effective_days=5))['restriction_level'],'no restriction')
 
-    def test_pediatric_exception_not_negative_gxp_alone(self):
-        x=patient(age_years=8,pediatric_noninfectious_confirmed="yes",adult_type_disease="no",smear="negative",
-                  cavitation="no",cough="none",extensive_radiographic_disease="no",gxp_mtb="not_detected",
-                  on_treatment="no",uninterrupted_effective_days=0)
-        self.assertEqual(evaluate(x)["isolation_level"],"none")
-        for kw in ({"age_years":10},{"adult_type_disease":"unknown"},{"smear":"1+"},{"gxp_mtb":"detected"}):
-            self.assertNotEqual(evaluate(replace(x,**kw))["isolation_level"],"none")
+ def test_aliases(self):
+  r=evaluate(patient(bacterial_burden='medium',gxp_status='detected RIF sensitive',patient_harm=None))
+  self.assertEqual(r['expected_days_of_restrictions'],7)
 
-    def test_extrapulmonary_exemption_and_conflict(self):
-        self.assertEqual(evaluate(patient(respiratory_tb="no",on_treatment="unknown"))["isolation_level"],"none")
-        self.assertNotEqual(evaluate(patient(respiratory_tb="no",smear="3+"))["isolation_level"],"none")
+ def test_validation(self):
+  for data in ({'treatment_days':True},{'treatment_days':-1},{'treatment_days':2.5},{'typo':1},{'bacterial_burden':'low','pretreatment_burden':'high'},{'treatment_days':5,'uninterrupted_effective_days':10}):
+   with self.subTest(data=data),self.assertRaises(ValueError): evaluate(data)
 
-    def test_no_facility_clearance(self):
-        for setting in ("healthcare","congregate_facility","unknown"):
-            r=evaluate(patient(setting=setting,uninterrupted_effective_days=100))
-            self.assertEqual(r["decision_status"],"out_of_scope_provisional_hold")
-            self.assertFalse(r["facility_clearance_granted"])
+ def test_576_combinations(self):
+  count=0
+  for b,c,h,g,d in itertools.product(('low','moderate','high'),('low','moderate','high'),('low','moderate','high','unknown'),('rif_sensitive','unavailable'),(0,4,5,7,10,13,14,15)):
+   r=evaluate(patient(bacterial_burden=b,community_risk=c,patient_harm=h,gxp_status=g,treatment_days=d));count+=1
+   self.assertIn(r['restriction_level'],('no restriction','moderate restriction','extensive restriction'))
+   self.assertLessEqual(r['expected_days_of_restrictions'],14)
+   if g=='unavailable': self.assertGreaterEqual(r['expected_days_of_restrictions'],10)
+   if r['restriction_level']=='no restriction':
+    self.assertFalse(r['release_blockers'])
+    self.assertGreaterEqual(r['credited_effective_treatment_days'],r['expected_days_of_restrictions'])
+   if r['expected_days_of_restrictions']==5:
+    self.assertEqual(c,'low'); self.assertIn(b,('low','high'))
+  self.assertEqual(count,576)
 
-    def test_actual_isolation_time_triggers_review(self):
-        r=evaluate(patient(days_since_isolation_started=21))
-        self.assertIn("PROLONGED_RESTRICTIONS_EXPERT_REVIEW_REQUIRED",r["release_blockers"])
-        self.assertEqual(evaluate(patient(days_since_isolation_started=21,expert_review_completed="yes"))["isolation_level"],"none")
-
-    def test_individual_extension(self):
-        x=patient(individualized_minimum_days=10,individualized_reason="Documented response uncertainty")
-        self.assertEqual(evaluate(x)["duration"]["conditional_target_total_days"],10)
-        with self.assertRaises(ValueError): evaluate(replace(x,individualized_reason=""))
-
-    def test_restrictive_environment_feasibility(self):
-        x=patient(community_risk="high",targeted_restrictions_feasible="no")
-        self.assertEqual(evaluate(x)["isolation_level"],"extensive")
-        self.assertEqual(evaluate(replace(x,targeted_restrictions_feasible="yes"))["isolation_level"],"moderate")
-
-    def test_schema_input_validation(self):
-        for data in ({"smear":"positive"},{"on_treatment":True},{"uninterrupted_effective_days":-1},
-                     {"uninterrupted_effective_days":5.5},{"uninterrupted_effective_days":True},
-                     {"typo":0},{"gxp_mtb":"not_detected","gxp_load":"low"}):
-            with self.subTest(data=data), self.assertRaises(ValueError): parse_inputs(data)
-        self.assertEqual(parse_inputs({"community_risk":"medium","on_treatment":None}).community_risk,"moderate")
-
-    def test_policy_floor(self):
-        self.assertGreaterEqual(evaluate(patient(patient_harm="high"),Policy(base_days=7))["duration"]["conditional_target_total_days"],7)
-        with self.assertRaises(ValueError): evaluate(patient(),Policy(base_days=4))
-
-    def test_permutation_safety_invariants(self):
-        count=0
-        for burden,risk,harm,rif,tx,day in itertools.product(
-                ("low","moderate","high","unknown"),("low","moderate","high","unknown"),
-                ("low","moderate","high","unknown"),("susceptible","resistant","unknown"),
-                ("yes","no","unknown"),(0,4,5,7,10,13,14,15)):
-            r=evaluate(patient(pretreatment_burden=burden,community_risk=risk,patient_harm=harm,
-                               rifampin=rif,on_treatment=tx,uninterrupted_effective_days=day))
-            count+=1
-            self.assertIn(r["isolation_level"],("none","moderate","extensive"))
-            if r["isolation_level"]=="none":
-                self.assertFalse(r["release_blockers"])
-                self.assertEqual(tx,"yes")
-                self.assertGreaterEqual(day,r["duration"]["conditional_target_total_days"])
-            if tx!="yes":
-                self.assertEqual(r["duration"]["credited_effective_days"],0)
-                self.assertIsNone(r["duration"]["remaining_days_if_conditions_remain_met"])
-        self.assertEqual(count,4608)
-
-
-if __name__ == "__main__":
-    unittest.main()
+if __name__=='__main__': unittest.main()

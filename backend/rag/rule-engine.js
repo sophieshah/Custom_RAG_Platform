@@ -4,7 +4,7 @@ import path from "node:path";
 import { resolvePythonExecutable } from "./local-embeddings.js";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const bridgePath = path.join(repositoryRoot, "tb_isolation_rules_package", "bridge.py");
+const bridgePath = path.join(repositoryRoot, "backend", "rag", "rule-engine-bridge.py");
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const TIMEOUT_MS = 15000;
 
