@@ -81,32 +81,56 @@ export function createChatRouter({
       };
       const task = await classifyTask({ openai, model, request });
       logRagStep("Task classification complete.", { task });
-      if (task === "isolation_decision") {
-        const decision = await prepareDecisionSupport({ openai, qdrant, embedQuery, model, request });
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.setHeader("Cache-Control", "no-cache, no-transform");
-        res.setHeader("X-TB-Case-State", Buffer.from(JSON.stringify(decision.caseState)).toString("base64url"));
-
-        if (decision.kind === "clarification") {
-          logRagStep("Overall response is a request for missing or conflicting case details.", {
-            missingFields: decision.missingFields,
-          });
-          return res.end(decision.text);
+      let responseRequest = { ...request, embedQuery };
+      if (["isolation_decision", "case_update", "combined"].includes(task)) {
+        const decisionRequest = {
+          ...request,
+          updateAllCaseFields: true,
+          initializeFromMessageOnly: task !== "isolation_decision" && !request.caseState,
+        };
+        const decision = await prepareDecisionSupport({
+          openai,
+          qdrant,
+          embedQuery,
+          model,
+          request: decisionRequest,
+        });
+        if (task !== "combined") {
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.setHeader("Cache-Control", "no-cache, no-transform");
+          res.setHeader(
+            "X-TB-Case-State",
+            Buffer.from(JSON.stringify(decision.caseState)).toString("base64url"),
+          );
+          res.end(decision.decisionText);
+          logRagStep("Overall rules-based case response assembled.", decision.decisionText);
+          return;
         }
-
-        res.flushHeaders?.();
-        res.end(decision.decisionText);
-        logRagStep("Overall decision-support response assembled from rule output, case facts, and RAG evidence review.", decision.decisionText);
-        return;
+        responseRequest = {
+          ...responseRequest,
+          decisionContext: {
+            case: decision.caseState.case,
+            result: decision.result,
+            narrative: decision.decisionText,
+          },
+        };
+        res.setHeader(
+          "X-TB-Case-State",
+          Buffer.from(JSON.stringify(decision.caseState)).toString("base64url"),
+        );
+        logRagStep("Updated case result will inform the user's additional question.", {
+          caseVersion: decision.caseState.version,
+          decisionStatus: decision.result.decision_status,
+        });
       }
 
       const { messages, evidence } = await prepareAgentMessages({
         openai,
         qdrant,
         model,
-        request: { ...request, embedQuery },
+        request: responseRequest,
       });
-      if (evidence.length === 0) {
+      if (evidence.length === 0 && !responseRequest.decisionContext) {
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.setHeader("Cache-Control", "no-cache, no-transform");
         logRagStep("General RAG found no evidence; returning the no-evidence response.");

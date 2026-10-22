@@ -1,4 +1,4 @@
-"""Deterministic COMMUNITY TB restriction proposal, version 0.1.0.
+"""Deterministic COMMUNITY TB restriction proposal, version 0.2.0.
 
 Research/pilot implementation requiring clinical policy validation before deployment.
 No external dependencies. Python >=3.10. See RULES_AND_EVIDENCE.txt.
@@ -11,7 +11,7 @@ import argparse
 import json
 from pathlib import Path
 
-VERSION = "0.1.0-draft"
+VERSION = "0.2.0-user-policy"
 GRADES = ("low", "moderate", "high", "unknown")
 TRI = ("yes", "no", "unknown")
 RANK = {"low": 0, "moderate": 1, "high": 2}
@@ -19,7 +19,7 @@ RANK = {"low": 0, "moderate": 1, "high": 2}
 
 @dataclass(frozen=True)
 class Inputs:
-    # Scope. This engine does not clear healthcare or congregate facility precautions.
+    # Optional context only: missing setting never changes the restriction level.
     setting: str = "unknown"  # community, healthcare, congregate_facility, unknown
     respiratory_tb: str = "unknown"  # yes, no (evaluated and excluded), unknown
     age_years: int | None = None
@@ -37,7 +37,7 @@ class Inputs:
     other_resistance: str = "unknown"  # none_detected, inh, pza, other, unknown
     resistance_suspected: str = "unknown"  # clinical/epidemiologic concern
     resistance_addressed_by_regimen: str = "unknown"
-    # All five are explicit judgments, not inferred from "RIPE" or an LLM narrative.
+    # Explicit adverse findings override the disclosed planning defaults.
     on_treatment: str = "unknown"
     regimen_appropriate: str = "unknown"  # adequate multidrug regimen/doses
     effectiveness_assessed: str = "unknown"  # clinician judgment, yes/no/unknown
@@ -70,6 +70,14 @@ class Inputs:
     individualized_minimum_days: int | None = None
     individualized_reason: str = ""
     expert_review_completed: str = "unknown"
+    gene_xpert: str = "unknown"
+    treatment_days: int | None = None
+    patient_immunosuppressed: str = "unknown"
+    symptoms_resolved: str = "unknown"
+    employment_harm: str = "unknown"
+    jurisdiction: str = "unspecified"
+    local_policy_minimum_days: int | None = None
+    local_policy_reason: str = ""
 
 
 ENUMS = {name: TRI for name in (
@@ -78,13 +86,14 @@ ENUMS = {name: TRI for name in (
     "resistance_addressed_by_regimen", "on_treatment", "regimen_appropriate",
     "effectiveness_assessed", "adherence_verified", "tolerance_adequate",
     "lab_supports_regimen", "adverse_response_explained", "vulnerable_contacts",
-    "congregate_return", "targeted_restrictions_feasible", "expert_review_completed")}
+    "congregate_return", "targeted_restrictions_feasible", "expert_review_completed",
+    "patient_immunosuppressed", "symptoms_resolved")}
 ENUMS.update({name: GRADES for name in (
     "pretreatment_burden", "community_risk", "patient_harm", "financial_harm",
-    "housing_harm", "food_harm", "stigma_harm", "mental_health_harm", "access_to_care_harm")})
+    "housing_harm", "food_harm", "stigma_harm", "mental_health_harm", "access_to_care_harm", "employment_harm")})
 ENUMS.update({
     "setting": ("community", "healthcare", "congregate_facility", "unknown"),
-    "smear": ("negative", "scanty", "1+", "2+", "3+", "4+", "unknown"),
+    "smear": ("negative", "positive", "scanty", "1+", "2+", "3+", "4+", "unknown"),
     "cough": ("none", "mild", "frequent", "unknown"),
     "gxp_mtb": ("detected", "not_detected", "unknown"),
     "gxp_load": ("trace", "very_low", "low", "medium", "high", "unknown"),
@@ -96,14 +105,28 @@ ENUMS.update({
     "exposure_proximity": ("distant", "shared_air", "close", "unknown"),
     "exposure_environment": ("outdoor", "well_ventilated", "poor_ventilation", "unknown"),
     "new_contacts": ("none", "few", "many", "unknown"),
+    "gene_xpert": ("rif_sensitive", "rif_resistant", "unavailable", "not_detected", "unknown"),
+    "jurisdiction": ("unspecified", "washington", "other"),
 })
 INTEGER_FIELDS = ("age_years", "uninterrupted_effective_days", "days_since_isolation_started",
-                  "individualized_minimum_days")
+                  "individualized_minimum_days", "treatment_days", "local_policy_minimum_days")
+
+ALIASES = {"bacterial_burden": "pretreatment_burden", "gxp_status": "gene_xpert",
+           "drug_resistance_concern": "resistance_suspected", "days_of_treatment": "treatment_days",
+           "treatment_effective": "effectiveness_assessed", "adherent": "adherence_verified",
+           "tolerating": "tolerance_adequate", "cavity": "cavitation", "sputum_smear": "smear",
+           "immunosuppressed": "patient_immunosuppressed", "congregate_or_shelter": "congregate_return"}
 
 
 def parse_inputs(data: dict) -> Inputs:
     if not isinstance(data, dict):
         raise ValueError("Input must be a JSON object")
+    data = dict(data)
+    for alias, canonical in ALIASES.items():
+        if alias in data:
+            if canonical in data and data[canonical] != data[alias]:
+                raise ValueError(f"Conflicting {alias} and {canonical}")
+            data[canonical] = data.pop(alias)
     extra = set(data) - {f.name for f in fields(Inputs)}
     if extra:
         raise ValueError(f"Unrecognized input field(s): {sorted(extra)}")
@@ -111,11 +134,24 @@ def parse_inputs(data: dict) -> Inputs:
     for name in ENUMS:
         if name in normalized:
             v = normalized[name]
-            if v is None:
+            if v is None or v == "":
                 v = "unknown"
+            if type(v) is bool and ENUMS[name] == TRI:
+                v = "yes" if v else "no"
             if not isinstance(v, str):
                 raise ValueError(f"{name} must be a named string value")
             v = v.strip().lower()
+            if name == "gene_xpert":
+                v = {"detected rif sensitive": "rif_sensitive", "detected rifampin sensitive": "rif_sensitive",
+                     "rif-s": "rif_sensitive", "rifampin-susceptible": "rif_sensitive",
+                     "detected rif resistant": "rif_resistant", "detected rifampin resistant": "rif_resistant",
+                     "rif-r": "rif_resistant", "not available": "unavailable"}.get(v, v)
+            if name == "jurisdiction":
+                v = {"wa": "washington", "washington state": "washington", "unknown": "unspecified"}.get(v,v)
+            if name == "micro_response":
+                v = {"declining": "improving", "unchanged": "stable", "rising": "worsening"}.get(v,v)
+            if name == "clinical_response":
+                v = {"no improvement": "stable", "not improving": "stable", "resolved": "asymptomatic"}.get(v,v)
             if name in (n for n, e in ENUMS.items() if e == GRADES) and v == "medium":
                 v = "moderate"
             normalized[name] = v
@@ -136,24 +172,15 @@ def validate(x: Inputs) -> None:
         raise ValueError("individualized_reason must be text")
     if x.individualized_minimum_days is not None and not x.individualized_reason.strip():
         raise ValueError("An individualized minimum requires a documented reason")
+    if not isinstance(x.local_policy_reason, str):
+        raise ValueError("local_policy_reason must be text")
+    if x.local_policy_minimum_days is not None and not x.local_policy_reason.strip():
+        raise ValueError("A local-policy minimum requires a documented policy reference/reason")
+    if (x.treatment_days is not None and x.uninterrupted_effective_days is not None
+            and x.uninterrupted_effective_days > x.treatment_days):
+        raise ValueError("Effective-treatment days cannot exceed total treatment days")
     if x.gxp_mtb == "not_detected" and x.gxp_load != "unknown":
         raise ValueError("MTB not detected cannot have an MTB semiquantitative load")
-
-
-@dataclass(frozen=True)
-class Policy:
-    """Proposed case-informed policy. Numerical choices beyond day 5 need approval."""
-    name: str = "case_informed_draft"
-    base_days: int = 5
-    moderate_burden_low_risk_days: int = 7
-    high_burden_low_risk_days: int = 10
-    low_burden_high_risk_days: int = 10
-    higher_burden_high_risk_days: int = 14
-    unknown_dst_low_burden_low_risk_days: int = 10
-    unknown_dst_other_days: int = 14
-    vulnerable_or_congregate_days: int = 14
-    rif_resistant_days: int = 14
-    review_interval_days: int = 7
 
 
 def _max_grade(values: list[str]) -> str:
@@ -161,261 +188,316 @@ def _max_grade(values: list[str]) -> str:
     return max(known, key=RANK.get) if known else "unknown"
 
 
-def derive_burden(x: Inputs) -> tuple[str, list[str]]:
-    """Proposed phenotype mapping, not a validated score; never uses follow-up smear."""
-    why = []
-    if (x.smear in ("2+", "3+", "4+") or x.cavitation == "yes"
-            or x.extensive_radiographic_disease == "yes" or x.gxp_load == "high"):
-        derived = "high"
-    elif x.smear in ("scanty", "1+") or x.gxp_load == "medium":
-        derived = "moderate"
-    elif (x.smear == "negative" and x.cavitation == "no"
-          and x.extensive_radiographic_disease == "no"
-          and x.cough in ("none", "mild")):
-        derived = "low"
-    elif x.smear == "negative" and x.cough == "frequent":
-        derived = "moderate"
-    else:
-        derived = "unknown"
-    grade = _max_grade([x.pretreatment_burden, derived])
-    if (x.pretreatment_burden != "unknown" and derived != "unknown"
-            and RANK[derived] > RANK[x.pretreatment_burden]):
-        why.append("BURDEN_CONFLICT: observed pretreatment markers raised supplied grade")
-    if grade == "unknown":
-        why.append("BURDEN_UNKNOWN: use high for precautionary decisions, not a diagnosis")
-    return grade, why
-
-
-def derive_community(x: Inputs) -> tuple[str, list[str]]:
-    why = []
-    high = (x.vulnerable_contacts == "yes" or x.congregate_return == "yes" or
-            (x.exposure_duration in ("recurrent", "prolonged") and
-             x.exposure_proximity in ("close", "shared_air") and
-             x.exposure_environment == "poor_ventilation"))
-    if high:
-        inferred = "high"
-    elif (x.exposure_duration == "brief" and x.exposure_proximity == "distant"
-          and x.exposure_environment in ("outdoor", "well_ventilated")
-          and x.new_contacts in ("none", "few")
-          and x.vulnerable_contacts == x.congregate_return == "no"):
-        inferred = "low"
-    elif all(v != "unknown" for v in (x.exposure_duration, x.exposure_proximity,
-             x.exposure_environment, x.new_contacts, x.vulnerable_contacts, x.congregate_return)):
-        inferred = "moderate"
-    else:
-        inferred = "unknown"
-    grade = _max_grade([x.community_risk, inferred])
-    if x.community_risk != "unknown" and inferred != "unknown" and RANK[inferred] > RANK[x.community_risk]:
-        why.append("COMMUNITY_CONFLICT: exposure details raised supplied grade")
-    if grade == "unknown":
-        why.append("COMMUNITY_UNKNOWN: use high pending exposure assessment")
-    return grade, why
-
-
-def derive_harm(x: Inputs) -> str:
-    # Max of clinician grades preserves a severe problem in one domain.
-    vals = [getattr(x, n) for n in ("financial_harm", "housing_harm", "food_harm",
-                                   "stigma_harm", "mental_health_harm", "access_to_care_harm")]
-    grade = _max_grade([x.patient_harm] + vals)
-    if x.patient_harm == "unknown" and "unknown" in vals and grade != "high":
-        return "unknown"  # partial questionnaire cannot establish low overall harm
-    return grade
-
-
-def assess_treatment(x: Inputs) -> tuple[bool, list[str]]:
-    blocks = []
-    for n in ("on_treatment", "regimen_appropriate", "effectiveness_assessed",
-              "adherence_verified", "tolerance_adequate"):
-        if getattr(x, n) != "yes":
-            blocks.append(f"TREATMENT_UNVERIFIED:{n}")
-    resistance = x.rifampin == "resistant" or x.other_resistance in ("inh", "pza", "other")
-    if resistance or x.resistance_suspected != "no":
-        if x.resistance_addressed_by_regimen != "yes":
-            blocks.append("RESISTANCE_NOT_ADDRESSED")
-        if x.lab_supports_regimen != "yes":
-            blocks.append("RESISTANCE_REQUIRES_REGIMEN_EVIDENCE")
-    if x.lab_supports_regimen == "no":
-        blocks.append("LAB_DOES_NOT_SUPPORT_REGIMEN")
-    if (x.clinical_response == "worsening" or x.micro_response == "worsening") and x.adverse_response_explained != "yes":
-        blocks.append("UNEXPLAINED_ADVERSE_RESPONSE")
-    # Unknown RIF is NOT synonymous with resistant. Empiric treatment may be judged
-    # effective if no resistance suspicion and clinical improvement supports that judgment.
-    if x.rifampin in ("unknown", "indeterminate") and x.lab_supports_regimen != "yes":
-        if x.resistance_suspected != "no" or x.clinical_response not in ("improving", "asymptomatic"):
-            blocks.append("UNKNOWN_DST_NEEDS_CLINICAL_SUPPORT")
-    return not blocks, blocks
-
-
-def _target(x: Inputs, p: Policy, burden: str, community: str, harm: str) -> tuple[int, list[str]]:
-    rules = []
-    elevated_harm = harm in ("moderate", "high")
-    if community == "low":
-        target = {"low": p.base_days, "moderate": p.moderate_burden_low_risk_days,
-                  "high": p.high_burden_low_risk_days}[burden]
-        if elevated_harm:
-            target = p.base_days
-        rules.append("D01_CASE_INFORMED_LOW_COMMUNITY")
-    elif community == "moderate":
-        # Medium-risk interpolation is a proposed policy, not directly in the matrix.
-        target = p.base_days if burden == "low" else (7 if elevated_harm else 10)
-        rules.append("D02_PROPOSED_MEDIUM_COMMUNITY")
-    else:
-        target = p.low_burden_high_risk_days if burden == "low" else (10 if elevated_harm else p.higher_burden_high_risk_days)
-        rules.append("D03_CASE_INFORMED_HIGH_COMMUNITY")
-    if x.rifampin in ("unknown", "indeterminate") and x.lab_supports_regimen != "yes":
-        target = max(target, p.unknown_dst_low_burden_low_risk_days if burden == community == "low" else p.unknown_dst_other_days)
-        rules.append("D04_UNKNOWN_DST_EXTENSION")
-    if x.vulnerable_contacts == "yes" or x.congregate_return == "yes":
-        target = max(target, p.vulnerable_or_congregate_days)
-        rules.append("D05_SPECIAL_EXPOSURE_EXTENSION")
-    if x.rifampin == "resistant":
-        target = max(target, p.rif_resistant_days)
-        rules.append("D06_RIF_RESISTANT_POLICY_MINIMUM")
-    if x.individualized_minimum_days is not None:
-        target = max(target, x.individualized_minimum_days)
-        rules.append("D07_DOCUMENTED_INDIVIDUAL_EXTENSION")
-    return max(target, p.base_days), rules
-
-
-def evaluate(x: Inputs, policy: Policy = Policy()) -> dict:
+def evaluate(x: Inputs | dict) -> dict:
+    """Apply the user's Oct 15 anchor policy. Missing decision-critical grades ask a
+    question rather than fabricate extensive restrictions. See expected_days_of_restrictions
+    (total effective-treatment target) and expected_remaining_days (conditional countdown).
+    """
+    if isinstance(x, dict):
+        x = parse_inputs(x)
     validate(x)
-    for f in fields(policy):
-        if f.name != "name" and (type(getattr(policy, f.name)) is not int or getattr(policy, f.name) < 1):
-            raise ValueError("Policy day values must be positive integers")
-    if policy.base_days < 5:
-        raise ValueError("Routine policy cannot shorten the five-day treatment anchor")
-    burden, notes = derive_burden(x)
-    community, community_notes = derive_community(x)
-    notes += community_notes
-    harm = derive_harm(x)
-    b = "high" if burden == "unknown" else burden
-    c = "high" if community == "unknown" else community
-    target, rules = _target(x, policy, b, c, harm)
-    effective, blocks = assess_treatment(x)
-    credited = x.uninterrupted_effective_days if effective and x.uninterrupted_effective_days is not None else 0
-    if effective and x.uninterrupted_effective_days is None:
-        blocks.append("EFFECTIVE_DURATION_UNKNOWN")
-    # Unknown site is not evidence that respiratory involvement was excluded.
-    if x.respiratory_tb == "unknown":
-        blocks.append("RESPIRATORY_INVOLVEMENT_UNKNOWN")
+    assumptions, questions, explanations, rules, blockers = [], [], [], [], []
+
+    def assume(field, value, why):
+        assumptions.append({"field": field, "value": value, "reason": why})
+        return value
+
+    def ask(field, text, required=False):
+        if not any(q["field"] == field for q in questions):
+            questions.append({"field": field, "question": text, "required_for_final_recommendation": required})
+
+    # A supplied grade is enough; optional raw findings must not become mandatory gates.
+    burden = x.pretreatment_burden
+    high_marker = x.smear in ("2+", "3+", "4+") or x.cavitation == "yes"
     if burden == "unknown":
-        blocks.append("PRETREATMENT_BURDEN_UNRESOLVED")
+        if high_marker:
+            burden = "high"
+        elif x.smear in ("positive", "scanty", "1+") or x.cough == "frequent":
+            burden = "moderate"
+        elif ((x.smear == "negative" and x.cavitation != "yes") or
+              (x.cavitation == "no" and x.cough == "none")):
+            burden = "low"
+        if burden != "unknown":
+            explanations.append(f"Pretreatment burden inferred as {burden} from available smear/cough/cavity findings.")
+            if "unknown" in (x.smear, x.cough, x.cavitation):
+                assume("pretreatment_burden", burden, "Provisional inference from partial findings; unreported markers are not recorded as negative.")
+                ask("pretreatment_burden", "Confirm the inferred burden or provide the missing pretreatment smear, cough, or cavity finding.")
+        else:
+            ask("pretreatment_burden", "Is initial bacterial burden low, medium, or high? Provide smear, cough, or cavity findings if available.", True)
+    elif high_marker and burden != "high":
+        ask("pretreatment_burden", "The supplied burden conflicts with a high smear grade or cavity. Confirm the burden grade.", True)
+        blockers.append("CONFLICTING_BURDEN")
+    # Grades are future shared-air risk, not an already treatment-adjusted risk score.
+    community = x.community_risk
     if community == "unknown":
-        blocks.append("COMMUNITY_RISK_UNRESOLVED")
+        if x.vulnerable_contacts == "yes" or x.congregate_return == "yes" or (
+            x.exposure_duration in ("recurrent", "prolonged") and
+            x.exposure_environment == "poor_ventilation"):
+            community = "high"
+        elif x.new_contacts == "none" or (
+            x.new_contacts == "few" and x.exposure_duration == "brief" and
+            x.exposure_environment in ("outdoor", "well_ventilated")):
+            community = "low"
+        elif x.new_contacts in ("few", "many") and x.exposure_duration != "unknown" and x.exposure_environment != "unknown":
+            community = "moderate"
+        if community == "unknown":
+            ask("community_risk", "Is community risk low, medium, or high, considering new contacts, vulnerability, frequency, and ventilation?", True)
+        else:
+            explanations.append(f"Community risk inferred as {community} from prospective exposure details.")
+    elif community != "high" and (x.vulnerable_contacts == "yes" or x.congregate_return == "yes"):
+        community = "high"
+        explanations.append("Prospective vulnerable-contact or congregate exposure raises community risk to high.")
+    domains = [getattr(x, n) for n in ("financial_harm", "housing_harm", "food_harm", "employment_harm",
+               "mental_health_harm", "stigma_harm", "access_to_care_harm")]
+    harm = _max_grade([x.patient_harm] + domains)
     if harm == "unknown":
-        notes.append("HARM_UNKNOWN: no automatic shortening; complete harm assessment")
-    if x.uninterrupted_effective_days and not effective:
-        notes.append("UNVERIFIED_DAYS_NOT_CREDITED: supplied duration is preserved in input only")
-    clinical_ok = x.clinical_response in ("improving", "asymptomatic")
-    if c == "high" and b != "low" and not (clinical_ok or x.micro_response == "improving"):
-        blocks.append("HIGH_RISK_RESPONSE_SUPPORT_REQUIRED")
-    # Stable positive smear alone is not a treatment failure and does not block routine release.
-    if x.rifampin == "resistant":
-        if x.expert_review_completed != "yes":
-            blocks.append("RIF_RESISTANT_EXPERT_REVIEW_REQUIRED")
-        if not clinical_ok:
-            blocks.append("RIF_RESISTANT_CLINICAL_RESPONSE_REQUIRED")
-        if x.micro_response != "improving":
-            blocks.append("RIF_RESISTANT_MICRO_RESPONSE_REQUIRED")
-    if x.rifampin in ("unknown", "indeterminate") and x.lab_supports_regimen != "yes" and not clinical_ok:
-        blocks.append("UNKNOWN_DST_CLINICAL_RESPONSE_REQUIRED")
-    # A prolonged actual isolation episode needs review even if the treatment clock is short.
-    overdue = x.days_since_isolation_started is not None and x.days_since_isolation_started > 14
-    if (overdue or target > 14) and x.expert_review_completed != "yes":
-        blocks.append("PROLONGED_RESTRICTIONS_EXPERT_REVIEW_REQUIRED")
-    exemption = None
-    if x.respiratory_tb == "no":
-        # Reject contradictory exclusion rather than silently releasing.
-        if x.smear in ("scanty", "1+", "2+", "3+", "4+") or x.gxp_mtb == "detected" or x.cavitation == "yes":
-            blocks.append("CONFLICT_RESPIRATORY_EXCLUSION")
+        harm = assume("patient_harm", "moderate", "No overall or domain harm grades supplied; user-specified default.")
+        ask("patient_harm", "Would isolation cause low, medium, or high housing, financial, food, employment, or mental-health harm?")
+    elif x.patient_harm == "unknown":
+        explanations.append("Patient harm uses the highest reported domain grade; missing domains are not barriers.")
+
+    rif = x.rifampin
+    gx_rif = {"rif_sensitive": "susceptible", "rif_resistant": "resistant"}.get(x.gene_xpert)
+    if gx_rif:
+        if rif not in ("unknown", "indeterminate", gx_rif):
+            blockers.append("CONFLICTING_RIF_RESULTS")
+            ask("rifampin", "Resolve conflicting rifampin susceptibility results.", True)
+        rif = "resistant" if "resistant" in (rif, gx_rif) else gx_rif
+    elif x.gene_xpert in ("unavailable", "not_detected") and rif == "susceptible":
+        explanations.append("Rifampin susceptibility was separately supplied; confirm the assay source. The no-GXP duration floor still applies.")
+    # Explicit legacy RIF-S is treated as the available rapid susceptibility result.
+    rapid_s = x.gene_xpert == "rif_sensitive" or (x.gene_xpert == "unknown" and rif == "susceptible" and x.gxp_mtb != "not_detected")
+    concern = x.resistance_suspected
+    if concern == "unknown":
+        concern = assume("resistance_suspected", "no", "No clinical/epidemiologic concern reported; user-specified default, not proof of susceptibility.")
+    known_resistance = rif == "resistant" or x.other_resistance in ("inh", "pza", "other")
+    resistance = known_resistance or concern == "yes"
+    if known_resistance:
+        concern = "yes"
+        explanations.append("Reported laboratory resistance overrides the default of no resistance concern.")
+        assumptions[:] = [a for a in assumptions if a["field"] != "resistance_suspected"]
+
+    adherent = x.adherence_verified
+    tolerant = x.tolerance_adequate
+    clinical = x.clinical_response
+    for field, value in (("adherence_verified", adherent), ("tolerance_adequate", tolerant)):
+        if value == "unknown":
+            v = assume(field, "yes", "User-specified planning default; no contrary information supplied.")
+            if field == "adherence_verified": adherent = v
+            else: tolerant = v
+            ask(field, "Confirm medication adherence." if field == "adherence_verified" else "Confirm treatment tolerance and ability to take the regimen.")
+    if clinical == "unknown":
+        clinical = assume("clinical_response", "improving", "User-specified planning default if receiving treatment; not an observed clinical finding.")
+        ask("clinical_response", "Is the patient improving clinically, unchanged, worsening, or asymptomatic?")
+    days = x.treatment_days if x.treatment_days is not None else x.uninterrupted_effective_days
+    on_tx = x.on_treatment
+    if on_tx == "unknown" and days is not None and days > 0:
+        on_tx = "yes"
+        explanations.append("Positive treatment-day count establishes that treatment has started.")
+    elif on_tx == "unknown":
+        on_tx = assume("on_treatment", "no", "Treatment start/duration unknown: zero effective-treatment credit.")
+        ask("treatment_days", "Has treatment started, and how many completed days have been taken?")
+    if x.on_treatment == "no" and days is not None and days > 0:
+        blockers.append("CONFLICTING_TREATMENT_STATUS")
+        ask("on_treatment", "Treatment is marked not started but positive treatment days were supplied. Resolve this conflict.", True)
+
+    # Negative findings always override defaults and an asserted effectiveness flag.
+    adverse = []
+    if adherent == "no": adverse.append("ADHERENCE_CONCERN")
+    if tolerant == "no": adverse.append("TOLERANCE_CONCERN")
+    if clinical in ("stable", "worsening") and x.adverse_response_explained != "yes":
+        adverse.append("NO_CLINICAL_IMPROVEMENT")
+    if x.micro_response == "worsening" and x.adverse_response_explained != "yes":
+        adverse.append("RISING_SMEAR")
+    if x.regimen_appropriate == "no" or x.lab_supports_regimen == "no" or x.effectiveness_assessed == "no":
+        adverse.append("TREATMENT_NOT_EFFECTIVE")
+    effective, effectiveness_basis = False, "not_established"
+    if on_tx == "yes" and not adverse:
+        if x.effectiveness_assessed == "yes":
+            effective, effectiveness_basis = True, "explicit_assessment"
+        elif rapid_s and not resistance:
+            effective, effectiveness_basis = True, "assumed_from_rif_susceptibility_and_no_concerns"
+            assume("effectiveness_assessed", "yes", "RIF susceptible with no resistance concern and no reported adherence, tolerance, or response problem.")
+        elif x.lab_supports_regimen == "yes" and x.regimen_appropriate == "yes" and (
+            not resistance or x.resistance_addressed_by_regimen == "yes"):
+            effective, effectiveness_basis = True, "regimen_supported_by_laboratory_and_clinician"
         else:
-            exemption = "S01_RESPIRATORY_TB_EXCLUDED"
-    if (x.age_years is not None and x.age_years < 10 and x.pediatric_noninfectious_confirmed == "yes"
-            and x.adult_type_disease == "no" and x.smear == "negative"
-            and x.cavitation == "no" and x.cough == "none"
-            and x.gxp_mtb != "detected" and x.extensive_radiographic_disease == "no"):
-        exemption = "S02_CONFIRMED_NONINFECTIOUS_PEDIATRIC_PHENOTYPE"
-    in_scope = x.setting == "community"
-    if not in_scope:
-        blocks.append("SETTING_REQUIRES_SEPARATE_PROTOCOL")
-    if exemption and in_scope:
-        level, status, target, credited, remaining = "none", "no_community_restrictions", 0, 0, 0
-        blocks = []
-        rules = [exemption]
-    else:
-        if not in_scope:
-            level, status = "extensive", "out_of_scope_provisional_hold"
-            rules.append("L00_OUT_OF_SCOPE")
-        elif not blocks and credited >= target:
-            level, status = "none", "eligible_to_discontinue_under_draft_policy"
-            rules.append("L01_TARGET_AND_RELEASE_CONDITIONS_MET")
-        else:
-            resistance_unresolved = any(v.startswith("RESISTANCE_") for v in blocks)
-            if not effective:
-                level = "extensive" if b == "high" or c == "high" or resistance_unresolved else "moderate"
-                rules.append("L02_NO_VERIFIED_EFFECTIVE_TREATMENT")
-            elif x.targeted_restrictions_feasible == "no" and c == "high":
-                level = "extensive"
-                rules.append("L03_TARGETED_RESTRICTIONS_NOT_FEASIBLE")
-            elif (x.rifampin == "resistant" and credited < 5) or (credited == 0 and b == "high"):
-                level = "extensive"
-                rules.append("L04_EARLY_HIGHER_RISK_TREATMENT")
-            elif x.targeted_restrictions_feasible == "unknown" and c == "high":
-                level = "extensive"
-                rules.append("L05_RESTRICTION_FEASIBILITY_UNKNOWN")
+            ask("effectiveness_assessed", "Is the current regimen judged effective? Unknown/unavailable GXP alone cannot establish effectiveness.")
+    credit = (x.uninterrupted_effective_days if x.uninterrupted_effective_days is not None else days) if effective else 0
+    if credit is None:
+        credit = 0
+        ask("treatment_days", "How many completed days of effective treatment have been taken?")
+    if effective and x.uninterrupted_effective_days is None and days is not None:
+        assume("uninterrupted_effective_days", days, "Reported treatment days assumed continuously effective under the stated treatment assessment; correct if the regimen changed or doses were missed.")
+    blockers += adverse
+    if not effective:
+        blockers.append("EFFECTIVE_TREATMENT_NOT_ESTABLISHED")
+    if effective and days is None:
+        blockers.append("TREATMENT_DURATION_UNKNOWN")
+
+    pediatric = (x.age_years is not None and x.age_years < 10 and x.adult_type_disease == "no"
+                 and (burden == "low" or x.pediatric_noninfectious_confirmed == "yes")
+                 and x.smear not in ("positive", "scanty", "1+", "2+", "3+", "4+")
+                 and x.cavitation != "yes")
+    excluded = x.respiratory_tb == "no" and not high_marker and x.smear not in ("positive", "scanty", "1+")
+    if x.respiratory_tb == "no" and not excluded:
+        blockers.append("CONFLICTING_RESPIRATORY_EXCLUSION")
+        ask("respiratory_tb", "Resolve respiratory-TB exclusion versus positive respiratory findings.", True)
+
+    target = lo = hi = None
+    special_symptoms = False
+    if burden != "unknown" and community != "unknown":
+        if not rapid_s:
+            target = 10 if burden == "low" and community == "low" else 14
+            rules.append("D_UNKNOWN_GXP_10_OR_14")
+        elif community == "low":
+            if burden == "low":
+                target = 5
+            elif burden == "moderate":
+                target = 7
+                if x.patient_immunosuppressed == "yes":
+                    target, special_symptoms = 10, True
             else:
-                level = "moderate"
-                rules.append("L06_TARGETED_RESTRICTIONS_DURING_TREATMENT")
-            status = "hold_pending_reassessment" if blocks else "continue_to_conditional_target"
-        # NULL means there is no defensible finite release countdown, not zero days.
-        remaining = None if blocks else max(0, target - credited)
-    support = [n for n in ("financial_harm", "housing_harm", "food_harm", "stigma_harm",
-                            "mental_health_harm", "access_to_care_harm") if getattr(x, n) in ("moderate", "high")]
-    if level == "none":
-        reassess = None
-    elif blocks or harm == "high":
-        reassess = 1  # operational proposal: prompt review; not a release interval
+                target = 10 if harm == "low" else 5
+            rules.append("D_RIF_S_LOW_COMMUNITY")
+        elif community == "moderate":
+            target = 7 if burden == "low" else (14 if burden == "high" and harm == "low" else 10)
+            rules.append("D_INTERPOLATED_MEDIUM_COMMUNITY")
+        else:
+            target = 10 if burden == "low" or harm != "low" else 14
+            rules.append("D_RIF_S_HIGH_COMMUNITY")
+        lo = hi = target
+        if rapid_s and burden == "high" and community == "low":
+            lo, hi = (10, 14) if harm == "low" else (5, 10)
+            rules.append("D_RANGE_LOWER_BOUND_WITH_FAVORABLE_RESPONSE")
+            if adverse:
+                target = hi
+                rules.append("D_RANGE_UPPER_BOUND_RESPONSE_CONCERN")
+        # Special flags do not impose the old blanket vulnerable-contact floor.
+        if community == "high" and (x.congregate_return == "yes" or
+             (burden == "low" and x.vulnerable_contacts == "yes" and harm == "low")):
+            target = lo = hi = 14
+            rules.append("D_SPECIAL_EXPOSURE_14")
+        if resistance:
+            target = lo = hi = max(target, 14)
+            rules.append("D_RESISTANCE_EXPERT_PATHWAY")
+        if special_symptoms and x.symptoms_resolved == "no" and clinical != "asymptomatic":
+            target, lo, hi = 14, 10, 14
+            explanations.append("Case 5c pattern: symptoms not resolved; use 14-day reassessment target while improving, without automatic extension beyond 14.")
+        elif special_symptoms and x.symptoms_resolved == "unknown" and clinical != "asymptomatic":
+            ask("symptoms_resolved", "Have symptoms resolved for the immunosuppressed moderate-burden case? The 10-day anchor is conditional on resolution.")
+            if credit >= 10 and credit < 14:
+                blockers.append("CASE_5C_SYMPTOM_RESOLUTION_UNCONFIRMED")
+            if credit >= 14:
+                target = lo = hi = 14
+        if x.individualized_minimum_days is not None:
+            target = max(target, x.individualized_minimum_days)
+            lo, hi = target, max(hi, target)
+            rules.append("D_DOCUMENTED_EXTENUATING_CIRCUMSTANCE")
+        if x.local_policy_minimum_days is not None:
+            target = max(target, x.local_policy_minimum_days)
+            lo, hi = target, max(hi, target)
+            rules.append("D_EXPLICIT_LOCAL_POLICY")
+        # Positive but unchanged smear does not remove all earlier treatment credit.
+        # It calls for expert reassessment at the 14-day boundary under user policy.
+        if x.micro_response == "stable" and x.adverse_response_explained != "yes" and (days or 0) >= 14:
+            blockers.append("UNCHANGED_SMEAR_AT_14_DAYS")
+        if resistance and x.expert_review_completed != "yes":
+            blockers.append("RESISTANCE_EXPERT_REVIEW_REQUIRED")
+    if x.jurisdiction == "washington" and x.local_policy_minimum_days is None:
+        ask("local_policy_minimum_days", "What current Washington/local TB-program release criterion applies? Supply the minimum and policy reference, or obtain local review.", True)
+        blockers.append("WASHINGTON_POLICY_REVIEW")
+    if x.setting in ("healthcare", "congregate_facility"):
+        explanations.append("This output addresses community RIR only; facility airborne precautions require separate clearance. Setting does not force extensive restrictions.")
+
+    critical = burden == "unknown" or community == "unknown" or any(
+        b.startswith("CONFLICTING_") for b in blockers)
+    if pediatric or excluded:
+        target = lo = hi = 0
+        level, status, remaining = "none", "no_restrictions_indicated", 0
+        rules = ["S_PEDIATRIC_NON_ADULT_TYPE" if pediatric else "S_RESPIRATORY_TB_EXCLUDED"]
+        blockers = []
+        # No treatment/grade follow-up is needed to decide an established exemption.
+        questions = []
+    elif critical:
+        level, status, remaining = None, "needs_input", None
+        explanations.append("Missing or conflicting core grades need clarification; no automatic extensive classification was assigned.")
+    elif not blockers and credit >= target:
+        level, status, remaining = "none", "target_met", 0
+        rules.append("L_TARGET_MET")
     else:
-        reassess = min(policy.review_interval_days, max(1, target - credited),
-                       max(1, 5 - credited) if credited < 5 else policy.review_interval_days)
+        if on_tx != "yes" or adverse:
+            level = "moderate" if burden == "low" and community == "low" and not resistance else "extensive"
+            rules.append("L_PRETREATMENT_OR_INEFFECTIVE")
+            explanations.append("Prompt initiation or restoration of effective treatment is needed.")
+        elif resistance and (not effective or credit < 5):
+            level = "extensive"
+            rules.append("L_EARLY_OR_UNCERTAIN_RESISTANT_TB")
+        elif x.targeted_restrictions_feasible == "no" and community == "high":
+            level = "extensive"
+            rules.append("L_TARGETED_PRECAUTIONS_NOT_FEASIBLE")
+        else:
+            level = "moderate"
+            rules.append("L_ON_TREATMENT_TARGETED_RESTRICTIONS")
+        status = "conditional_reassessment" if blockers else "continue_to_target"
+        remaining = None if blockers else max(0, target - credit)
+    expert = bool(resistance or adverse or "UNCHANGED_SMEAR_AT_14_DAYS" in blockers or
+                  (target is not None and target > 14) or "WASHINGTON_POLICY_REVIEW" in blockers)
+    if x.days_since_isolation_started is not None and x.days_since_isolation_started > 14:
+        expert = True  # referral, not an automatic extra isolation day
+    if x.micro_response == "improving":
+        explanations.append("Declining smear grade does not extend isolation beyond the target; smear conversion is not required.")
+    if adverse or "UNCHANGED_SMEAR_AT_14_DAYS" in blockers or (resistance and blockers):
+        explanations.append("The displayed days are the baseline planning target, not a release deadline. Response/resistance concerns require expert reassessment; any additional duration is not yet determined.")
+    if not rapid_s and not (pediatric or excluded):
+        explanations.append("Without an available GXP RIF-sensitive result, the planning target is at least 10 days; effectiveness is assessed separately.")
+    labels = {None: None, "none": "no restriction", "moderate": "moderate restriction", "extensive": "extensive restriction"}
+    explanations += [f"Assumption: {a['field']}={a['value']}. {a['reason']}" for a in assumptions]
+    if target is not None and target > 0:
+        explanations.append(f"Expected course: {target} effective-treatment days (anchor range {lo}-{hi}); credited {credit}. This is not a guaranteed calendar release date.")
     return {
-        "ruleset_version": VERSION, "policy": policy.name, "clinical_validation_status": "draft_not_validated",
-        "isolation_level": level, "decision_status": status,
-        "duration": {
-            "clock": "verified_uninterrupted_effective_treatment_days",
-            "conditional_target_total_days": target,
-            "credited_effective_days": credited,
-            "remaining_days_if_conditions_remain_met": remaining,
-            "fixed_release_date": None,
-            "reassess_within_days": reassess,
-        },
-        "normalized_assessment": {"pretreatment_burden": burden, "burden_used_for_policy": b,
-                                  "community_risk": community, "community_used_for_policy": c,
-                                  "patient_harm": harm, "effective_treatment_verified": effective},
-        "rule_ids": rules, "release_blockers": list(dict.fromkeys(blocks)),
-        "notes": notes, "support_domains": support,
-        "expert_review_required": bool(overdue or target > 14 or x.rifampin == "resistant"),
-        "restriction_definition": {
-            "none": "No community RIR under this draft policy; treatment and follow-up continue.",
-            "moderate": "Restrict high-risk shared-air activities; allow individually planned low-risk activities with mitigation.",
-            "extensive": "Provisional broad separation from new contacts; arrange essential care and supports. This does not mandate hospitalization.",
-        }[level],
+        "ruleset_version": VERSION, "policy": "user_anchor_policy_2026_10_15",
+        "restriction_level": labels[level], "expected_days_of_restrictions": target,
+        "expected_days_range": {"minimum": lo, "maximum": hi},
+        "expected_remaining_days": remaining, "decision_status": status,
+        "credited_effective_treatment_days": credit,
+        "duration_is_conditional": bool(blockers or assumptions or critical),
+        "assumptions": assumptions, "questions": questions,
+        "explanation": explanations, "rule_ids": rules,
+        "release_blockers": list(dict.fromkeys(blockers)), "expert_consultation_recommended": expert,
+        "normalized_assessment": {"pretreatment_burden": burden, "community_risk": community,
+            "patient_harm": harm, "rifampin": rif, "resistance_concern": concern,
+            "on_treatment": on_tx, "treatment_effective": effective,
+            "effectiveness_basis": effectiveness_basis, "adherent": adherent,
+            "tolerating": tolerant, "clinical_response": clinical},
+        # Compatibility keys for v1 callers; the new canonical label is restriction_level.
+        "isolation_level": level,
+        "duration": {"clock": "effective_treatment_days", "conditional_target_total_days": target,
+            "credited_effective_days": credit, "remaining_days_if_conditions_remain_met": remaining,
+            "fixed_release_date": None, "reassess_within_days": None if level == "none" else (1 if blockers or critical else min(7, max(1, target-credit)))},
         "facility_clearance_granted": False,
-        "llm_contract": "Explain this structured decision and unresolved inputs. Do not remove blockers, invent treatment credit, or silently change the level/duration. Record any clinician-approved deviation separately.",
+        "llm_contract": "Report restriction_level and expected_days_of_restrictions together. Disclose assumptions, distinguish total from remaining days, and ask required questions. A null level with needs_input must never be converted to extensive. Do not treat assumptions as verified observations.",
     }
 
 
 def input_schema() -> dict:
-    properties = {name: {"type": ["string", "null"], "enum": list(options) + [None]}
-                  for name, options in ENUMS.items()}
+    props = {}
     for name, options in ENUMS.items():
-        if options == GRADES:
-            properties[name]["enum"].append("medium")
-    properties.update({n: {"type": ["integer", "null"], "minimum": 0} for n in INTEGER_FIELDS})
-    properties["individualized_reason"] = {"type": "string"}
-    return {"$schema": "https://json-schema.org/draft/2020-12/schema", "title": "TB community isolation inputs",
-            "type": "object", "additionalProperties": False, "properties": properties,
-            "description": "Omitted fields remain unknown. Integer durations count completed days of verified uninterrupted effective treatment."}
+        vals = list(options) + [None, ""]
+        types = ["string", "null"]
+        if options == TRI:
+            vals += [True, False]
+            types.append("boolean")
+        if options == GRADES: vals.append("medium")
+        if name == "gene_xpert": vals += ["detected RIF sensitive", "detected RIF resistant", "not available", "rif-s", "rif-r"]
+        props[name] = {"type": types, "enum": vals}
+    props.update({n: {"type": ["integer", "null"], "minimum": 0} for n in INTEGER_FIELDS})
+    props.update({n: {"type": "string"} for n in ("individualized_reason", "local_policy_reason")})
+    for alias, canonical in ALIASES.items():
+        props[alias] = dict(props[canonical], description=f"Alias of {canonical}; do not send conflicting values.")
+    return {"$schema": "https://json-schema.org/draft/2020-12/schema", "title": "TB community isolation inputs v2",
+            "type": "object", "additionalProperties": False, "properties": props,
+            "description": "Minimal practical inputs: bacterial_burden, community_risk, gxp_status, treatment_days. Harm/adherence/tolerance/clinical-response defaults are disclosed. Missing grades yield questions, not extensive by default."}
 
 
 def main() -> None:
@@ -427,7 +509,7 @@ def main() -> None:
         print(json.dumps(input_schema(), indent=2))
     elif args.input:
         try:
-            result = evaluate(parse_inputs(json.loads(args.input.read_text(encoding="utf-8-sig"))))
+            result = evaluate(json.loads(args.input.read_text(encoding="utf-8-sig")))
         except (ValueError, TypeError) as e:
             parser.error(str(e))
         print(json.dumps(result, indent=2))

@@ -116,7 +116,7 @@ export default function Chat({ onBackToHome }) {
         })
       });
 
-      if (!res.ok) throw new Error("Backend error");
+      if (!res.ok) throw new Error("Backend error 1");
       
       await new Promise(resolve => setTimeout(resolve, 1500));
       
@@ -193,7 +193,7 @@ export default function Chat({ onBackToHome }) {
         })
       });
 
-      if (!res.ok) throw new Error("Backend error");
+      if (!res.ok) throw new Error("Backend error 2");
       
       await new Promise(resolve => setTimeout(resolve, 1500));
       
@@ -248,79 +248,161 @@ export default function Chat({ onBackToHome }) {
     });
   };
 
-  const handleSend = async (messageText = input) => {
-    if (!messageText.trim()) return;
+  
+const handleSend = async (messageText = input) => {
+  const trimmedMessage = messageText.trim();
+  if (!trimmedMessage || isSending) return;
 
-    const userMessage = { role: "user", content: messageText };
-    setMessages(prev => [...prev, userMessage]);
-    setInput("");
-    setIsSending(true);
-    
-    const thinkingMessage = { role: "assistant", content: "Thinking.", isThinking: true };
-    setMessages(prev => [...prev, thinkingMessage]);
-
-    try {
-      // Build conversation history (excluding thinking messages and isThinking property)
-      const conversationHistory = messages
-        .filter(msg => !msg.isThinking)
-        .map(msg => ({ role: msg.role, content: msg.content }));
-
-      const res = await fetch("http://localhost:3001/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          message: messageText,
-          patientContext: patientContext,
-          structuredData: structuredData,
-          conversationHistory: conversationHistory,
-          ...(caseState ? { caseState } : {})
-        })
-      });
-
-      if (!res.ok) throw new Error("Backend error");
-      const encodedCaseState = res.headers.get("X-TB-Case-State");
-      if (encodedCaseState) {
-        const base64State = encodedCaseState.replace(/-/g, "+").replace(/_/g, "/");
-        const paddedState = base64State.padEnd(Math.ceil(base64State.length / 4) * 4, "=");
-        const binaryState = atob(paddedState);
-        const stateBytes = Uint8Array.from(binaryState, character => character.charCodeAt(0));
-        setCaseState(JSON.parse(new TextDecoder().decode(stateBytes)));
-      }
-      
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      
-      let aiMessage = { role: "assistant", content: "", isThinking: false };
-      let isFirstChunk = true;
-      
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        
-        const chunk = decoder.decode(value, { stream: true });
-        aiMessage.content += chunk;
-        
-        if (isFirstChunk && aiMessage.content.trim().length > 0) {
-          setMessages(prev => [...prev.slice(0, -1), { ...aiMessage }]);
-          isFirstChunk = false;
-        } else if (!isFirstChunk) {
-          setMessages(prev => [...prev.slice(0, -1), { ...aiMessage }]);
-        }
-        
-        await new Promise(resolve => setTimeout(resolve, 20));
-      }
-    } catch (err) {
-      setMessages(prev => [
-        ...prev.slice(0, -1),
-        { role: "assistant", content: "Error: " + err.message }
-      ]);
-    } finally {
-      setIsSending(false);
-      setActiveTab("agent");
-    }
+  const userMessage = {
+    role: "user",
+    content: trimmedMessage,
   };
+
+  // Include the current message explicitly; React state updates are asynchronous.
+  const conversationHistory = [
+    ...messages
+      .filter((msg) => !msg.isThinking)
+      .map(({ role, content }) => ({ role, content })),
+    { role: "user", content: trimmedMessage },
+  ];
+
+  setMessages((prev) => [
+    ...prev,
+    userMessage,
+    {
+      role: "assistant",
+      content: "Thinking.",
+      isThinking: true,
+    },
+  ]);
+
+  setInput("");
+  setIsSending(true);
+  setActiveTab("agent");
+
+  try {
+    const res = await fetch("http://localhost:3001/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: trimmedMessage,
+        patientContext,
+        structuredData,
+        conversationHistory,
+        ...(caseState ? { caseState } : {}),
+      }),
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(errorText || `Backend error (${res.status})`);
+    }
+
+    // The backend must return the updated case state in this header,
+    // including when the response is a clarification question.
+    const encodedCaseState = res.headers.get("X-TB-Case-State");
+
+    if (encodedCaseState) {
+      try {
+        const base64State = encodedCaseState
+          .replace(/-/g, "+")
+          .replace(/_/g, "/");
+
+        const paddedState = base64State.padEnd(
+          Math.ceil(base64State.length / 4) * 4,
+          "="
+        );
+
+        const binaryState = atob(paddedState);
+        const stateBytes = Uint8Array.from(
+          binaryState,
+          (character) => character.charCodeAt(0)
+        );
+
+        const parsedState = JSON.parse(
+          new TextDecoder().decode(stateBytes)
+        );
+
+        setCaseState(parsedState);
+      } catch (error) {
+        throw new Error(
+          `The server returned an invalid case state: ${error.message}`
+        );
+      }
+    }
+
+    if (!res.body) {
+      throw new Error("The server returned an empty response stream.");
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+
+    let assistantText = "";
+    let firstChunk = true;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      assistantText += decoder.decode(value, { stream: true });
+
+      const displayedMessage = {
+        role: "assistant",
+        content: assistantText,
+        isThinking: false,
+      };
+
+      if (firstChunk) {
+        setMessages((prev) => [
+          ...prev.slice(0, -1),
+          displayedMessage,
+        ]);
+        firstChunk = false;
+      } else {
+        setMessages((prev) => [
+          ...prev.slice(0, -1),
+          displayedMessage,
+        ]);
+      }
+    }
+
+    // Flush any remaining bytes from the text decoder.
+    assistantText += decoder.decode();
+
+    if (firstChunk) {
+      setMessages((prev) => [
+        ...prev.slice(0, -1),
+        {
+          role: "assistant",
+          content: assistantText || "The server returned no response.",
+          isThinking: false,
+        },
+      ]);
+    } else if (assistantText) {
+      setMessages((prev) => [
+        ...prev.slice(0, -1),
+        {
+          role: "assistant",
+          content: assistantText,
+          isThinking: false,
+        },
+      ]);
+    }
+  } catch (err) {
+    setMessages((prev) => [
+      ...prev.slice(0, -1),
+      {
+        role: "assistant",
+        content: `Error: ${err.message}`,
+        isThinking: false,
+      },
+    ]);
+  } finally {
+    setIsSending(false);
+  }
+};
+
 
   // Suggested questions
   const suggestedQuestions = [
