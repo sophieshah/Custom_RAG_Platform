@@ -9,19 +9,16 @@ export default function HomePage({ onGetStarted, onAdmin }) {
         <div className="logo-section">
           {/* Replace this div with your actual logo image */}
           <div className="logo-placeholder">
-            <h1>TB Isolation Assistant</h1>
+            <h1>TB Guidance Assistant</h1>
           </div>
         </div>
 
         {/* Description Section */}
         <div className="description-section">
-          <h2>Welcome to the TB Isolation Decision Support Tool</h2>
+          <h2>Welcome to the TB Public-Health Guidance Assistant</h2>
           <p>
-            This tool helps healthcare providers make informed decisions about tuberculosis (TB) 
-            patient isolation based on clinical guidelines and patient-specific factors.
-          </p>
-          <p>
-            [Add more description here about what the tool does, who it's for, and how it helps]
+            Ask questions about tuberculosis guidance. Responses use the indexed knowledge sources
+            and cite supporting passages when available.
           </p>
         </div>
 
@@ -55,14 +52,6 @@ export default function HomePage({ onGetStarted, onAdmin }) {
               <a href="https://academic.oup.com/jid/article/231/1/31/7814557?login=false" target="_blank" rel="noopener noreferrer">Learn More →</a>
             </div>
 
-            <div className="resource-item">
-              <a href="https://360.articulate.com/review/content/441bc837-66ee-4e21-9b32-4029435f4b30/review" target="_blank" rel="noopener noreferrer">
-                <h4>TB Isolation Assistant Decision Support Tool</h4>
-              </a>
-              <p>Decision support agent for Tuberculosis isolation based on NTCA guidelines</p>
-              <a href="https://360.articulate.com/review/content/441bc837-66ee-4e21-9b32-4029435f4b30/review" target="_blank" rel="noopener noreferrer">Learn More →</a>
-            </div>
-            
             <div className="resource-item">
               <a href="https://academic.oup.com/jid/issue/231/1" target="_blank" rel="noopener noreferrer">
                 <h4>The Journal of Infectious Diseases</h4>

@@ -1,7 +1,7 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "description": "TB isolation decision-support chatbot with Qdrant-backed RAG",
+  "description": "TB public-health guidance assistant with Qdrant-backed RAG",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "build": "vite build frontend",
     "ingest": "node backend/rag/ingest.js",
     "ingest:pdf": "python backend/ingest.py documents",
-    "test": "node --test backend/rag/rag.test.js && python -m unittest discover -s tb_isolation_rules_package -p test_tb_isolation_rules.py"
+    "test": "node --test backend/rag/rag.test.js"
   },
   "keywords": [],
   "author": "",

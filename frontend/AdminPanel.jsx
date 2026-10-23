@@ -15,6 +15,7 @@ export default function AdminPanel({ onBack }) {
   const [password, setPassword] = useState("");
   const [instructions, setInstructions] = useState("");
   const [files, setFiles] = useState([]);
+  const [documents, setDocuments] = useState([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -27,6 +28,15 @@ export default function AdminPanel({ onBack }) {
       Authorization: `Bearer ${token}`,
     },
   });
+
+  const fetchDocuments = async (authToken = token) => {
+    const response = await fetch(`${API_URL}/documents`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const result = await readResponse(response);
+    setDocuments(result.documents);
+    return result.documents;
+  };
 
   const handleLogin = async (event) => {
     event.preventDefault();
@@ -46,7 +56,8 @@ export default function AdminPanel({ onBack }) {
       setToken(result.token);
       setPassword("");
       setInstructions(stored.systemInstructions);
-      setStatus("Signed in. Full system instructions loaded from source code.");
+      const indexedDocuments = await fetchDocuments(result.token);
+      setStatus(`Signed in. Loaded ${indexedDocuments.length} indexed document(s) from Qdrant.`);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -99,8 +110,32 @@ export default function AdminPanel({ onBack }) {
       setStatus(outcomes.join(" "));
       setFiles([]);
       if (fileInputRef.current) fileInputRef.current.value = "";
+      await fetchDocuments();
     } catch (requestError) {
       setError(`${requestError.message}${outcomes.length ? ` Already indexed: ${outcomes.join(" ")}` : ""}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteDocument = async (document) => {
+    if (!window.confirm(`Delete "${document.title}" and all of its indexed chunks from Qdrant?`)) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setStatus("");
+    try {
+      const response = await authorizedFetch(`${API_URL}/documents`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceFile: document.sourceFile }),
+      });
+      const result = await readResponse(response);
+      setDocuments((current) => current.filter((item) => item.sourceFile !== document.sourceFile));
+      setStatus(result.message);
+    } catch (requestError) {
+      setError(requestError.message);
     } finally {
       setBusy(false);
     }
@@ -116,6 +151,7 @@ export default function AdminPanel({ onBack }) {
     } finally {
       setToken("");
       setInstructions("");
+      setDocuments([]);
       setBusy(false);
       setStatus("");
       setError(logoutError);
@@ -161,15 +197,65 @@ export default function AdminPanel({ onBack }) {
             </div>
 
             <section className="admin-section">
+              <div className="admin-section-heading">
+                <div>
+                  <h2>Indexed Qdrant documents</h2>
+                  <p>Documents available to RAG. Deleting a document removes all its indexed chunks from Qdrant.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setBusy(true);
+                    setError("");
+                    try {
+                      const currentDocuments = await fetchDocuments();
+                      setStatus(`Loaded ${currentDocuments.length} indexed document(s) from Qdrant.`);
+                    } catch (requestError) {
+                      setError(requestError.message);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                  disabled={busy}
+                >
+                  Refresh
+                </button>
+              </div>
+              {documents.length === 0 ? (
+                <p className="admin-empty">No documents are currently indexed in Qdrant.</p>
+              ) : (
+                <ul className="admin-indexed-list">
+                  {documents.map((document) => (
+                    <li key={document.sourceFile} className="admin-indexed-item">
+                      <div>
+                        <strong>{document.title}</strong>
+                        <span>{document.sourceFile}</span>
+                        <span>{document.pointCount} indexed chunk{document.pointCount === 1 ? "" : "s"}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="admin-delete"
+                        onClick={() => deleteDocument(document)}
+                        disabled={busy}
+                      >
+                        Delete
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section className="admin-section">
               <h2>Upload knowledge documents</h2>
-              <p>Upload PDF, Markdown, or text files. Files are chunked, embedded, and indexed in the configured Qdrant collection. Files up to 20 MB are accepted.</p>
+              <p>Upload PDF files ONLY. Files are chunked, embedded, and indexed in the configured Qdrant collection. Files up to 20 MB are accepted. Note that the name of the new file must be different from existing filenames.</p>
               <form className="admin-form" onSubmit={uploadFiles}>
                 <label>
                   Select documents
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".pdf"
+                    accept=".pdf,.md,.txt"
                     multiple
                     onChange={(event) => setFiles(Array.from(event.target.files || []))}
                   />

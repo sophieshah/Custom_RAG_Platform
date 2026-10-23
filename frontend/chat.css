@@ -2,7 +2,7 @@
 /* LAYOUT & CONTAINERS */
 /* ============================================ */
 
-/* App Layout - Main wrapper for chat + side panel */
+/* App Layout */
 .app-layout {
   display: flex;
   gap: 0;
@@ -26,12 +26,6 @@
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   background-color: #f9f9f9;
   box-shadow: 0 8px 20px rgba(0,0,0,0.1);
-}
-
-.chat-container.with-help-panel {
-  flex: 1;
-  width: auto;
-  min-width: 600px;
 }
 
 /* Chat Tab Container */
@@ -111,10 +105,74 @@
   color: white;
 }
 
+.tab-header button[role="tab"]:focus-visible {
+  outline: 2px solid #005fa3;
+  outline-offset: 2px;
+}
+
 .reset-btn {
   margin-left: auto;
   background: #c0392b !important;
   color: white;
+}
+
+.context-tab {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.context-tab h2 {
+  margin-top: 0;
+}
+
+.context-tab > p {
+  color: #555;
+  line-height: 1.5;
+}
+
+.context-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 18px 0;
+  font-weight: 600;
+}
+
+.context-field textarea,
+.context-field input,
+.context-field select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: white;
+  font: inherit;
+}
+
+.context-field textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.context-field input:focus,
+.context-field select:focus,
+.context-field textarea:focus {
+  outline: 2px solid #007acc;
+  outline-offset: 1px;
+}
+
+.primary-btn {
+  margin-top: 8px;
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 8px;
+  background: #007acc;
+  color: white;
+  cursor: pointer;
+  font-weight: 600;
 }
 
 /* ============================================ */
@@ -350,196 +408,9 @@
 }
 
 /* ============================================ */
-/* CONTEXT/FORM TABS */
-/* ============================================ */
-
-.context-tab {
-  padding: 20px;
-  overflow-y: auto;
-  flex: 1;
-  min-height: 0;
-}
-
-.context-tab textarea {
-  width: 90%;
-  min-height: 200px;
-  padding: 12px;
-  border-radius: 8px;
-  border: 1px solid #ccc;
-  resize: vertical;
-  font-size: 1rem;
-}
-
-.context-tab label {
-  display: block;
-  margin-top: 12px;
-  font-weight: 600;
-}
-
-.context-tab select {
-  width: 100%;
-  padding: 6px 8px;
-  margin-bottom: 12px;
-  border-radius: 6px;
-  border: 1px solid #ccc;
-}
-
-.context-tab input[type="range"] {
-  width: 100%;
-  margin: 4px 0 12px;
-}
-
-/* Field with Help Button */
-.field-with-help {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-  margin-top: 20px;
-}
-
-.field-with-help label {
-  margin: 0;
-}
-
-/* Field Instructions */
-.field-instructions {
-  background-color: #f0f8ff;
-  border-left: 4px solid #007ACC;
-  padding: 12px 15px;
-  margin-bottom: 12px;
-  border-radius: 4px;
-}
-
-.field-instructions p {
-  margin: 0 0 8px 0;
-  color: #333;
-  font-size: 0.9rem;
-}
-
-.field-instructions p:last-child {
-  margin-bottom: 0;
-}
-
-.field-instructions ul {
-  margin: 8px 0 0 20px;
-  padding: 0;
-}
-
-.field-instructions li {
-  margin: 4px 0;
-  color: #555;
-  font-size: 0.9rem;
-}
-
-.field-instructions em {
-  color: #666;
-  font-style: italic;
-}
-
 /* ============================================ */
 /* BUTTONS */
 /* ============================================ */
-
-.primary-btn {
-  margin-top: 15px;
-  background: #007acc;
-  color: white;
-  border: none;
-  padding: 10px 18px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: bold;
-}
-
-.help-btn {
-  background-color: #f0f0f0;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  padding: 6px 12px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.help-btn:hover {
-  background-color: #e0e0e0;
-}
-
-.help-btn:active {
-  background-color: #d0d0d0;
-}
-
-/* ============================================ */
-/* HELP SIDE PANEL */
-/* ============================================ */
-
-.help-side-panel {
-  width: 550px;
-  background: white;
-  border: 1px solid #ddd;
-  border-radius: 12px;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 8px 20px rgba(0,0,0,0.1);
-  overflow: hidden;
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  flex-shrink: 0;
-}
-
-.help-panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 15px 20px;
-  background-color: #28a745;
-  color: white;
-  border-bottom: 1px solid #ddd;
-}
-
-.help-panel-header h3 {
-  margin: 0;
-  font-size: 1.2rem;
-  font-weight: bold;
-}
-
-.close-panel-btn {
-  background: none;
-  border: none;
-  color: white;
-  font-size: 28px;
-  cursor: pointer;
-  padding: 0;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-}
-
-.close-panel-btn:hover {
-  opacity: 0.8;
-}
-
-.help-panel-messages {
-  flex: 1;
-  min-height: 0;
-  padding: 15px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  background-color: #f9f9f9;
-}
-
-.help-panel-input {
-  display: flex;
-  border-top: 1px solid #ddd;
-  padding: 10px;
-  background-color: #fff;
-  gap: 10px;
-}
 
 /* ============================================ */
 /* RESPONSIVE */
@@ -550,19 +421,18 @@
     flex-direction: column;
     height: auto;
   }
-  
-  .help-side-panel {
-    width: 100%;
-    height: 50vh;
-    margin-top: 20px;
-  }
-  
-  .chat-container.with-help-panel {
-    height: 50vh;
+
+  .chat-container {
+    height: calc(100vh - 40px);
+    min-height: 600px;
   }
 
   .tab-header {
     overflow-x: auto;
     flex-wrap: nowrap;
+  }
+
+  .tab-header button {
+    flex: 0 0 auto;
   }
 }

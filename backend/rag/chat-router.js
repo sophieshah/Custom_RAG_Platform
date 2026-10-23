@@ -5,11 +5,6 @@ import {
   prepareAgentMessages,
   streamAgentAnswer,
 } from "./agent.js";
-import {
-  classifyTask,
-  prepareDecisionSupport,
-  validateCaseStateEnvelope,
-} from "./decision-support.js";
 import { logRagStep } from "./trace.js";
 
 export function createChatRouter({
@@ -24,16 +19,18 @@ export function createChatRouter({
   router.post("/api/chat", async (req, res) => {
     const {
       message,
+      conversationHistory = [],
       patientContext,
       structuredData,
-      conversationHistory = [],
-      caseState: suppliedCaseState,
     } = req.body || {};
     if (typeof message !== "string" || !message.trim()) {
       return res.status(400).json({ error: "Message is required." });
     }
     if (message.length > 8000) {
       return res.status(400).json({ error: "Message must be 8,000 characters or fewer." });
+    }
+    if (!Array.isArray(conversationHistory)) {
+      return res.status(400).json({ error: "Conversation history must be an array." });
     }
     if (patientContext !== undefined && typeof patientContext !== "string") {
       return res.status(400).json({ error: "Patient context must be text." });
@@ -45,7 +42,7 @@ export function createChatRouter({
       structuredData !== undefined &&
       (!structuredData || typeof structuredData !== "object" || Array.isArray(structuredData))
     ) {
-      return res.status(400).json({ error: "Structured case data must be an object." });
+      return res.status(400).json({ error: "Structured input data must be an object." });
     }
     if (
       structuredData &&
@@ -54,86 +51,31 @@ export function createChatRouter({
         !["string", "number", "boolean"].includes(typeof value)
       ))
     ) {
-      return res.status(400).json({ error: "Structured case values must be scalar values." });
+      return res.status(400).json({ error: "Structured input values must be scalar values." });
     }
-    if (!Array.isArray(conversationHistory)) {
-      return res.status(400).json({ error: "Conversation history must be an array." });
-    }
-    let caseState;
-    if (suppliedCaseState !== undefined) {
-      try {
-        caseState = validateCaseStateEnvelope(suppliedCaseState);
-      } catch (error) {
-        return res.status(400).json({
-          error: error instanceof Error ? error.message : "Invalid canonical case state.",
-        });
-      }
+    if (structuredData && JSON.stringify(structuredData).length > 32000) {
+      return res.status(400).json({ error: "Structured input data must be 32,000 characters or fewer." });
     }
 
     try {
       const request = {
         message: message.trim(),
+        conversationHistory,
         patientContext,
         structuredData,
-        conversationHistory,
-        caseState,
+        embedQuery,
         additionalSystemInstructions: await getAdditionalInstructions(),
       };
-      const task = await classifyTask({ openai, model, request });
-      logRagStep("Task classification complete.", { task });
-      let responseRequest = { ...request, embedQuery };
-      if (["isolation_decision", "case_update", "combined"].includes(task)) {
-        const decisionRequest = {
-          ...request,
-          updateAllCaseFields: true,
-          initializeFromMessageOnly: task !== "isolation_decision" && !request.caseState,
-        };
-        const decision = await prepareDecisionSupport({
-          openai,
-          qdrant,
-          embedQuery,
-          model,
-          request: decisionRequest,
-        });
-        if (task !== "combined") {
-          res.setHeader("Content-Type", "text/plain; charset=utf-8");
-          res.setHeader("Cache-Control", "no-cache, no-transform");
-          res.setHeader(
-            "X-TB-Case-State",
-            Buffer.from(JSON.stringify(decision.caseState)).toString("base64url"),
-          );
-          res.end(decision.decisionText);
-          logRagStep("Overall rules-based case response assembled.", decision.decisionText);
-          return;
-        }
-        responseRequest = {
-          ...responseRequest,
-          decisionContext: {
-            case: decision.caseState.case,
-            result: decision.result,
-            narrative: decision.decisionText,
-          },
-        };
-        res.setHeader(
-          "X-TB-Case-State",
-          Buffer.from(JSON.stringify(decision.caseState)).toString("base64url"),
-        );
-        logRagStep("Updated case result will inform the user's additional question.", {
-          caseVersion: decision.caseState.version,
-          decisionStatus: decision.result.decision_status,
-        });
-      }
-
       const { messages, evidence } = await prepareAgentMessages({
         openai,
         qdrant,
         model,
-        request: responseRequest,
+        request,
       });
-      if (evidence.length === 0 && !responseRequest.decisionContext) {
+      if (evidence.length === 0) {
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.setHeader("Cache-Control", "no-cache, no-transform");
-        logRagStep("General RAG found no evidence; returning the no-evidence response.");
+        logRagStep("RAG found no evidence; returning the no-evidence response.");
         return res.end(NO_EVIDENCE_RESPONSE);
       }
       const stream = await streamAgentAnswer({ openai, model, messages });
@@ -153,11 +95,11 @@ export function createChatRouter({
         }
       }
 
-      logRagStep("Generated general RAG response.", ragOutput);
+      logRagStep("Generated RAG response.", ragOutput);
       const sources = formatSourceList(evidence);
       if (!res.destroyed) {
         res.end(sources);
-        logRagStep("Overall general RAG response assembled.", `${ragOutput}${sources}`);
+        logRagStep("Overall RAG response assembled.", `${ragOutput}${sources}`);
       }
     } catch (error) {
       console.error("Chat request failed:", error instanceof Error ? error.message : "Unknown error");

@@ -67,6 +67,80 @@
   line-height: 1.5;
 }
 
+.admin-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.admin-section-heading p {
+  color: #526477;
+  line-height: 1.5;
+}
+
+.admin-section-heading > button {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border: 1px solid #b9c8d4;
+  border-radius: 6px;
+  background: #fff;
+  color: #334b60;
+  cursor: pointer;
+}
+
+.admin-section-heading > button:disabled,
+.admin-delete:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.admin-empty {
+  padding: 14px;
+  border-radius: 6px;
+  background: #f5f8fa;
+}
+
+.admin-indexed-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-indexed-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid #dbe3ea;
+  border-radius: 8px;
+}
+
+.admin-indexed-item > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.admin-indexed-item span {
+  overflow-wrap: anywhere;
+  color: #526477;
+  font-size: 0.9rem;
+}
+
+.admin-delete {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border: 1px solid #b72e2e;
+  border-radius: 6px;
+  background: #fff;
+  color: #a32121;
+  cursor: pointer;
+}
+
 .admin-form {
   display: grid;
   gap: 16px;
@@ -147,5 +221,16 @@
 @media (max-width: 600px) {
   .admin-card {
     padding: 22px 18px;
+  }
+
+  .admin-section-heading,
+  .admin-indexed-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-section-heading > button,
+  .admin-delete {
+    align-self: flex-start;
   }
 }

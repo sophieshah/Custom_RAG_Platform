@@ -4,12 +4,6 @@ import {
   NO_EVIDENCE_RESPONSE,
   prepareAgentMessages,
 } from "../backend/rag/agent.js";
-import {
-  classifyTask,
-  formatDecisionResult,
-  formatDecisionSources,
-  prepareDecisionSupport,
-} from "../backend/rag/decision-support.js";
 import { LocalEmbeddingWorker } from "../backend/rag/local-embeddings.js";
 import { QdrantClient } from "../backend/rag/qdrant.js";
 
@@ -39,54 +33,50 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Message is required." });
   }
 
-  const request = {
-    message: message.trim(),
-    patientContext: req.body.patientContext,
-    structuredData: req.body.structuredData,
-    conversationHistory: req.body.conversationHistory,
-  };
+  const conversationHistory = req.body?.conversationHistory ?? [];
+  if (!Array.isArray(conversationHistory)) {
+    return res.status(400).json({ error: "Conversation history must be an array." });
+  }
+  const patientContext = req.body?.patientContext;
+  const structuredData = req.body?.structuredData;
+  if (patientContext !== undefined && typeof patientContext !== "string") {
+    return res.status(400).json({ error: "Patient context must be text." });
+  }
+  if (typeof patientContext === "string" && patientContext.length > 32000) {
+    return res.status(400).json({ error: "Patient context must be 32,000 characters or fewer." });
+  }
+  if (
+    structuredData !== undefined &&
+    (!structuredData || typeof structuredData !== "object" || Array.isArray(structuredData))
+  ) {
+    return res.status(400).json({ error: "Structured input data must be an object." });
+  }
+  if (
+    structuredData &&
+    Object.values(structuredData).some((value) => (
+      value !== null &&
+      !["string", "number", "boolean"].includes(typeof value)
+    ))
+  ) {
+    return res.status(400).json({ error: "Structured input values must be scalar values." });
+  }
+  if (structuredData && JSON.stringify(structuredData).length > 32000) {
+    return res.status(400).json({ error: "Structured input data must be 32,000 characters or fewer." });
+  }
 
   try {
     await qdrant.ensureCollection();
-    const task = await classifyTask({ openai: client, model, request });
-    if (task === "isolation_decision") {
-      const decision = await prepareDecisionSupport({
-        openai: client,
-        qdrant,
-        embedQuery,
-        model,
-        request,
-      });
-      if (decision.kind === "clarification") {
-        return res.status(200).json({ reply: decision.text });
-      }
-
-      const warning = decision.review?.assessment === "conflict"
-        ? "\n\nEvidence consistency: conflict detected. The deterministic result is unchanged; clinician review is needed."
-        : decision.review?.assessment === "insufficient"
-          ? "\n\nEvidence consistency: supporting evidence was insufficient. The deterministic result is unchanged."
-          : "";
-      if (!decision.explanationMessages) {
-        return res.status(200).json({
-          reply: `${decision.deterministicText}\n\nNo supporting guidance was retrieved for this rule result.`,
-        });
-      }
-
-      const response = await client.chat.completions.create({
-        model,
-        messages: decision.explanationMessages,
-      });
-      const explanation = response.choices[0]?.message?.content || "";
-      return res.status(200).json({
-        reply: `${formatDecisionResult(decision.result)}${warning}\n\nExplanation:\n${explanation}${formatDecisionSources(decision.evidence)}`,
-      });
-    }
-
     const { messages, evidence } = await prepareAgentMessages({
       openai: client,
       qdrant,
       model,
-      request: { ...request, embedQuery },
+      request: {
+        message: message.trim(),
+        conversationHistory,
+        patientContext,
+        structuredData,
+        embedQuery,
+      },
     });
     if (evidence.length === 0) {
       return res.status(200).json({ reply: NO_EVIDENCE_RESPONSE });
