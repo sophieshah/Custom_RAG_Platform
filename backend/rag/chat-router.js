@@ -5,6 +5,7 @@ import {
   prepareAgentMessages,
   streamAgentAnswer,
 } from "./agent.js";
+import { getDefaultInputConfig, validateInputValues } from "./input-config.js";
 import { logRagStep } from "./trace.js";
 
 export function createChatRouter({
@@ -13,8 +14,18 @@ export function createChatRouter({
   embedQuery,
   model,
   getAdditionalInstructions = async () => "",
+  getInputConfig = async () => getDefaultInputConfig(),
 }) {
   const router = express.Router();
+
+  router.get("/api/input-config", async (_req, res, next) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      return res.json(await getInputConfig());
+    } catch (error) {
+      return next(error);
+    }
+  });
 
   router.post("/api/chat", async (req, res) => {
     const {
@@ -38,31 +49,20 @@ export function createChatRouter({
     if (typeof patientContext === "string" && patientContext.length > 32000) {
       return res.status(400).json({ error: "Patient context must be 32,000 characters or fewer." });
     }
-    if (
-      structuredData !== undefined &&
-      (!structuredData || typeof structuredData !== "object" || Array.isArray(structuredData))
-    ) {
-      return res.status(400).json({ error: "Structured input data must be an object." });
-    }
-    if (
-      structuredData &&
-      Object.values(structuredData).some((value) => (
-        value !== null &&
-        !["string", "number", "boolean"].includes(typeof value)
-      ))
-    ) {
-      return res.status(400).json({ error: "Structured input values must be scalar values." });
-    }
-    if (structuredData && JSON.stringify(structuredData).length > 32000) {
-      return res.status(400).json({ error: "Structured input data must be 32,000 characters or fewer." });
-    }
 
     try {
+      const inputConfig = await getInputConfig();
+      try {
+        validateInputValues(structuredData, inputConfig);
+      } catch (error) {
+        return res.status(400).json({ error: error.message });
+      }
       const request = {
         message: message.trim(),
         conversationHistory,
         patientContext,
         structuredData,
+        inputConfig,
         embedQuery,
         additionalSystemInstructions: await getAdditionalInstructions(),
       };

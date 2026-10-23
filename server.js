@@ -51,6 +51,7 @@ app.use(createChatRouter({
   model,
   embedQuery: (text) => embeddingWorker.embedQueries([text]).then(([vector]) => vector),
   getAdditionalInstructions: () => adminConfig.getAdditionalInstructions(),
+  getInputConfig: () => adminConfig.getInputConfig(),
 }));
 app.locals.adminConfig = adminConfig;
 app.locals.embeddingWorker = embeddingWorker;

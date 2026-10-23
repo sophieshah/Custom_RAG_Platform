@@ -44,17 +44,22 @@ function getHistory(history) {
     .map(({ role, content }) => ({ role, content: content.slice(0, 8000) }));
 }
 
-function createUserMessage({ message, patientContext, structuredData }) {
+function createUserMessage({ message, patientContext, structuredData, inputConfig }) {
   const context = [];
   if (typeof patientContext === "string" && patientContext.trim()) {
     context.push(`Patient narrative supplied by the user (context, not guideline evidence):\n${patientContext.trim()}`);
   }
   if (structuredData && typeof structuredData === "object" && !Array.isArray(structuredData)) {
-    const values = Object.entries(structuredData)
-      .filter(([, value]) => value !== null && value !== undefined && String(value).trim())
-      .map(([key, value]) => `- ${key}: ${String(value).slice(0, 1000)}`);
+    const configuredFields = inputConfig?.tabs?.flatMap((tab) => (
+      tab.fields.map((field) => ({ ...field, tabTitle: tab.title }))
+    )) || [];
+    const values = configuredFields
+      .filter(({ id }) => Object.hasOwn(structuredData, id))
+      .map(({ id, label, tabTitle }) => (
+        `- ${tabTitle} / ${label || id}: ${String(structuredData[id]).slice(0, 8000)}`
+      ));
     if (values.length > 0) {
-      context.push(`Additional user-provided patient inputs (context, not guideline evidence):\n${values.join("\n")}`);
+      context.push(`Additional user-provided form inputs (context, not guideline evidence):\n${values.join("\n")}`);
     }
   }
   return [...context, `Question:\n${message}`].join("\n\n");

@@ -4,12 +4,15 @@ import {
   NO_EVIDENCE_RESPONSE,
   prepareAgentMessages,
 } from "../backend/rag/agent.js";
+import { AdminConfigStore } from "../backend/rag/admin-config.js";
 import { LocalEmbeddingWorker } from "../backend/rag/local-embeddings.js";
 import { QdrantClient } from "../backend/rag/qdrant.js";
+import { validateInputValues } from "../backend/rag/input-config.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const qdrant = new QdrantClient();
 const embeddingWorker = new LocalEmbeddingWorker();
+const configStore = new AdminConfigStore();
 const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
 async function embedQuery(text) {
@@ -45,26 +48,13 @@ export default async function handler(req, res) {
   if (typeof patientContext === "string" && patientContext.length > 32000) {
     return res.status(400).json({ error: "Patient context must be 32,000 characters or fewer." });
   }
-  if (
-    structuredData !== undefined &&
-    (!structuredData || typeof structuredData !== "object" || Array.isArray(structuredData))
-  ) {
-    return res.status(400).json({ error: "Structured input data must be an object." });
-  }
-  if (
-    structuredData &&
-    Object.values(structuredData).some((value) => (
-      value !== null &&
-      !["string", "number", "boolean"].includes(typeof value)
-    ))
-  ) {
-    return res.status(400).json({ error: "Structured input values must be scalar values." });
-  }
-  if (structuredData && JSON.stringify(structuredData).length > 32000) {
-    return res.status(400).json({ error: "Structured input data must be 32,000 characters or fewer." });
-  }
-
   try {
+    const inputConfig = await configStore.getInputConfig();
+    try {
+      validateInputValues(structuredData, inputConfig);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
     await qdrant.ensureCollection();
     const { messages, evidence } = await prepareAgentMessages({
       openai: client,
@@ -75,7 +65,9 @@ export default async function handler(req, res) {
         conversationHistory,
         patientContext,
         structuredData,
+        inputConfig,
         embedQuery,
+        additionalSystemInstructions: await configStore.getAdditionalInstructions(),
       },
     });
     if (evidence.length === 0) {

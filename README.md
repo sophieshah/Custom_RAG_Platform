@@ -101,6 +101,12 @@ ADMIN_DATA_DIR=data
 
 Open the app homepage and select **Admin**, then sign in. Login is rate-limited; issued sessions expire after two hours and are kept in server memory, so a backend restart signs admins out. The browser keeps the session token only in memory. Use HTTPS and protect access to the server when deploying beyond local development.
 
+The admin interface has separate **Frontend** and **Backend** tabs. Frontend edits the user input tabs and controls; Backend manages Qdrant documents and system instructions.
+
+### Configure frontend input tabs
+
+In **Frontend**, add, rename, edit, or remove tabs and their input fields. Supported control types are text, textarea, number, select, and checkbox. Select options and required fields can be configured. **Preview changes** renders the draft without publishing it; **Save frontend configuration** validates and stores it as versioned JSON in `ADMIN_DATA_DIR/input-config.json`. The chat loads this schema from `/api/input-config` and renders controls according to each field's type. Field values are sent as user-provided context alongside retrieved guidance, not as evidence.
+
 ### View and remove indexed documents
 
 The **Indexed Qdrant documents** list is loaded from the configured collection after admin sign-in. It groups indexed chunks by document and shows each source and chunk count. Use **Refresh** to reload the list. **Delete** removes every chunk for the selected source from Qdrant; for files added through the admin upload form, it also removes the stored upload.

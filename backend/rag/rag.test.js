@@ -9,6 +9,11 @@ import { AdminConfigStore } from "./admin-config.js";
 import { createAdminRouter } from "./admin-router.js";
 import { prepareAgentMessages } from "./agent.js";
 import { createChatRouter } from "./chat-router.js";
+import {
+  getDefaultInputConfig,
+  validateInputConfig,
+  validateInputValues,
+} from "./input-config.js";
 import { chunkDocumentPages, chunkText, stablePointId } from "./documents.js";
 import { formatEvidence, formatSourceList, searchGuidance } from "./retrieval.js";
 import { QdrantClient } from "./qdrant.js";
@@ -25,10 +30,17 @@ async function withChatServer({
   openai,
   qdrant,
   embedQuery = async () => [0.1, 0.2],
+  getInputConfig,
 }, run) {
   const app = express();
   app.use(express.json());
-  app.use(createChatRouter({ openai, qdrant, embedQuery, model: "test-model" }));
+  app.use(createChatRouter({
+    openai,
+    qdrant,
+    embedQuery,
+    model: "test-model",
+    ...(getInputConfig ? { getInputConfig } : {}),
+  }));
 
   const server = app.listen(0);
   await new Promise((resolve) => server.once("listening", resolve));
@@ -106,16 +118,24 @@ test("ensureCollection creates a missing collection with configured dimensions",
     fetchImpl: async (url, options = {}) => {
       calls.push({ url, options });
       if (calls.length === 1) return new Response("", { status: 404 });
+      if (calls.length === 3) {
+        return new Response(JSON.stringify({ result: { payload_schema: {} } }), { status: 200 });
+      }
       return new Response(JSON.stringify({ result: { status: "ok" } }), { status: 200 });
     },
   });
 
   await qdrant.ensureCollection();
 
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 4);
   assert.equal(calls[1].options.method, "PUT");
   assert.deepEqual(JSON.parse(calls[1].options.body), {
     vectors: { size: 3, distance: "Cosine" },
+  });
+  assert.match(calls[3].url, /\/index\?wait=true$/);
+  assert.deepEqual(JSON.parse(calls[3].options.body), {
+    field_name: "source_file",
+    field_schema: "keyword",
   });
 });
 
@@ -206,6 +226,63 @@ test("Qdrant document listing groups chunks across scroll pages and supports sou
     filter: { must: [{ key: "document_id", match: { value: "legacy-1" } }] },
   });
   await assert.rejects(qdrant.deleteBySource("legacy-1", "payload"), /Unsupported Qdrant/);
+});
+
+test("input configuration validates control types, IDs, and options", () => {
+  const configuration = getDefaultInputConfig();
+  assert.equal(validateInputConfig(configuration).tabs.length, 5);
+  assert.throws(() => validateInputConfig({
+    version: 1,
+    tabs: [
+      { id: "same", title: "One", fields: [] },
+      { id: "same", title: "Two", fields: [] },
+    ],
+  }), /Duplicate tab id/);
+  assert.throws(() => validateInputConfig({
+    version: 1,
+    tabs: [{
+      id: "form",
+      title: "Form",
+      fields: [{ id: "choice", label: "Choice", type: "select", options: [] }],
+    }],
+  }), /need between 1 and 50 options/);
+  assert.deepEqual(validateInputConfig({ version: 1, tabs: [] }), { version: 1, tabs: [] });
+  assert.throws(() => validateInputValues({ answer: "Maybe" }, {
+    version: 1,
+    tabs: [{
+      id: "follow-up",
+      title: "Follow-up",
+      fields: [{
+        id: "answer",
+        label: "Answer",
+        type: "select",
+        required: true,
+        options: ["Yes", "No"],
+      }],
+    }],
+  }), /match one of its configured options/);
+});
+
+test("admin input configuration persists as JSON separately from admin instructions", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "tb-admin-config-test-"));
+  const store = new AdminConfigStore({ directory });
+  try {
+    const configuration = {
+      version: 1,
+      tabs: [{
+        id: "custom",
+        title: "Custom",
+        fields: [{ id: "note", label: "Note", type: "textarea" }],
+      }],
+    };
+    await store.setAdditionalInstructions("Keep answers concise.");
+    await store.setInputConfig(configuration);
+    assert.deepEqual(await store.getInputConfig(), configuration);
+    assert.equal(await store.getAdditionalInstructions(), "Keep answers concise.");
+    assert.deepEqual(JSON.parse(await readFile(store.inputConfigPath, "utf8")), configuration);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("retrieval uses the configured local query embedding and the Python index payload shape", async () => {
@@ -423,6 +500,8 @@ test("admin endpoints authenticate, reject malformed instructions, and index upl
     assert.equal(forbidden.status, 401);
     const forbiddenDocuments = await fetch(`${url}/documents`);
     assert.equal(forbiddenDocuments.status, 401);
+    const forbiddenInputConfig = await fetch(`${url}/input-config`);
+    assert.equal(forbiddenInputConfig.status, 401);
 
     const loginResponse = await fetch(`${url}/login`, {
       method: "POST",
@@ -432,6 +511,41 @@ test("admin endpoints authenticate, reject malformed instructions, and index upl
     assert.equal(loginResponse.status, 200);
     const { token } = await loginResponse.json();
     const headers = { Authorization: `Bearer ${token}` };
+
+    const configResponse = await fetch(`${url}/input-config`, { headers });
+    assert.equal(configResponse.status, 200);
+    const savedConfig = await configResponse.json();
+    assert.equal(savedConfig.tabs.length, 5);
+
+    const customInputConfig = {
+      version: 1,
+      tabs: [{
+        id: "follow-up",
+        title: "Follow-up",
+        fields: [{
+          id: "answer",
+          label: "Answer",
+          type: "select",
+          required: true,
+          options: ["Yes", "No"],
+        }],
+      }],
+    };
+    const saveConfigResponse = await fetch(`${url}/input-config`, {
+      method: "PUT",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(customInputConfig),
+    });
+    assert.equal(saveConfigResponse.status, 200);
+    assert.deepEqual((await saveConfigResponse.json()).inputConfig, customInputConfig);
+    assert.deepEqual(await configStore.getInputConfig(), customInputConfig);
+
+    const invalidConfigResponse = await fetch(`${url}/input-config`, {
+      method: "PUT",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 2, tabs: [] }),
+    });
+    assert.equal(invalidConfigResponse.status, 400);
 
     const saveResponse = await fetch(`${url}/instructions`, {
       method: "PUT",
@@ -572,10 +686,10 @@ test("chat route streams an answer followed by its source citation", async () =>
       body: JSON.stringify({
         message: "When can isolation end?",
         conversationHistory: [{ role: "assistant", content: "Previous answer context." }],
-        patientContext: "Patient reports a persistent cough.",
         structuredData: {
+          patientNarrative: "Patient reports a persistent cough.",
           bacterialBurden: "High",
-          treatmentDays: "12",
+          treatmentDays: 12,
         },
       }),
     });
@@ -593,9 +707,9 @@ test("chat route streams an answer followed by its source citation", async () =>
   const userMessage = generatedMessages.find((item) => (
     item.role === "user" && item.content.includes("Question:\nWhen can isolation end?")
   ));
-  assert.match(userMessage.content, /Patient reports a persistent cough/);
-  assert.match(userMessage.content, /bacterialBurden: High/);
-  assert.match(userMessage.content, /treatmentDays: 12/);
+  assert.match(userMessage.content, /Patient Narrative \/ Patient details: Patient reports a persistent cough/);
+  assert.match(userMessage.content, /Labs \/ Pre-treatment bacterial burden: High/);
+  assert.match(userMessage.content, /Treatment \/ Days on treatment: 12/);
   assert.match(userMessage.content, /not guideline evidence/);
 });
 
@@ -654,4 +768,58 @@ test("chat route validates input and returns a no-evidence fallback", async () =
 
   assert.equal(embeddingCalls, 1);
   assert.equal(generatedCalls, 1);
+});
+
+test("chat route serves the current config and validates configured required fields", async () => {
+  const inputConfig = {
+    version: 1,
+    tabs: [{
+      id: "details",
+      title: "Details",
+      fields: [{
+        id: "consent",
+        label: "Consent",
+        type: "select",
+        required: true,
+        options: ["Yes", "No"],
+      }],
+    }],
+  };
+  await withChatServer({
+    openai: {
+      chat: {
+        completions: {
+          create: async () => ({ choices: [{ message: {} }] }),
+        },
+      },
+    },
+    qdrant: { search: async () => [] },
+    getInputConfig: async () => inputConfig,
+  }, async (url) => {
+    const configResponse = await fetch(`${url}/api/input-config`);
+    assert.equal(configResponse.status, 200);
+    assert.deepEqual(await configResponse.json(), inputConfig);
+
+    const missingRequired = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Question", structuredData: {} }),
+    });
+    assert.equal(missingRequired.status, 400);
+    assert.match((await missingRequired.json()).error, /Consent.*required/);
+
+    const invalidOption = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Question", structuredData: { consent: "Maybe" } }),
+    });
+    assert.equal(invalidOption.status, 400);
+
+    const validInput = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Question", structuredData: { consent: "Yes" } }),
+    });
+    assert.equal(validInput.status, 200);
+  });
 });

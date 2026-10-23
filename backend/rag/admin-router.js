@@ -5,6 +5,7 @@ import express from "express";
 import multer from "multer";
 import { indexDocument } from "./index-document.js";
 import { titleFromPath } from "./documents.js";
+import { validateInputConfig } from "./input-config.js";
 import {
   readSystemInstructionsFromSource,
   saveSystemInstructionsToSource,
@@ -150,6 +151,30 @@ router.put("/instructions", async (req, res, next) => {
       return res.status(400).json({ error: error.message });
     }
 
+    return next(error);
+  }
+});
+
+router.get("/input-config", async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(await req.app.locals.adminConfig.getInputConfig());
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.put("/input-config", async (req, res, next) => {
+  let validatedConfig;
+  try {
+    validatedConfig = validateInputConfig(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  try {
+    const inputConfig = await req.app.locals.adminConfig.setInputConfig(validatedConfig);
+    return res.json({ success: true, inputConfig });
+  } catch (error) {
     return next(error);
   }
 });
